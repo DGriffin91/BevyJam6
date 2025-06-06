@@ -3,12 +3,18 @@
 
 struct GameData {
     bg_color: vec4<f32>,
+    circle_count: u32,
+    spare1: u32,
+    spare2: u32,
+    spare3: u32,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(2) @binding(0) var<uniform> game: GameData;
-@group(2) @binding(1) var base_color_texture: texture_2d<f32>;
-@group(2) @binding(2) var base_color_sampler: sampler;
+@group(2) @binding(1) var pos_radius_tex: texture_2d<f32>;
+@group(2) @binding(2) var pos_radius_sampler: sampler;
+@group(2) @binding(3) var color_tex: texture_2d<f32>;
+@group(2) @binding(4) var color_sampler: sampler;
 
 struct FullscreenVertexOutput {
     @builtin(position)
@@ -49,14 +55,24 @@ fn blend_shapes(c1: vec4<f32>, c2: vec4<f32>, shape_k: f32, color_k: f32) -> vec
 }
 
 fn map(p: vec2<f32>) -> vec4<f32> {
-    var c1 = vec4(1.0, 0.1, 0.1, sdCircle(p - vec2(0.3, 0.3), 0.2)); 
-    var c2 = vec4(0.2, 0.2, 0.2, sdCircle(p, 0.3));
-    var c3 = vec4(1.0, 0.1, 1.1, sdCircle(p - vec2(0.1, -0.3), 0.2)); 
+    //var c1 = vec4(1.0, 0.1, 0.1, sdCircle(p - vec2(0.3, 0.3), 0.2)); 
+    //var c2 = vec4(0.2, 0.2, 0.2, sdCircle(p, 0.3));
+    //var c3 = vec4(1.0, 0.1, 1.1, sdCircle(p - vec2(0.1, -0.3), 0.2)); 
+    //
+    //var shape = vec4(0.0);
+    //
+    //shape = blend_shapes(c1, c2, 0.15, 0.3);
+    //shape = blend_shapes(c3, shape, 0.15, 0.3);
 
-    var shape = vec4(0.0);
-    
-    shape = blend_shapes(c1, c2, 0.15, 0.3);
-    shape = blend_shapes(c3, shape, 0.15, 0.3);
+    let cir_0_data = textureLoad(pos_radius_tex, vec2(0, 0), 0);
+    let cir_0_color = textureLoad(color_tex, vec2(0, 0), 0);
+    var shape = vec4(cir_0_color.rgb, sdCircle(p - cir_0_data.xy, cir_0_data.z));
+    for (var i = 1u; i < game.circle_count; i += 1u) {
+        let cir_data = textureLoad(pos_radius_tex, vec2(i, 0), 0);
+        let cir_color = textureLoad(color_tex, vec2(i, 0), 0);
+        var new_shape = vec4(cir_color.rgb, sdCircle(p - cir_data.xy, cir_data.z));
+        shape = blend_shapes(shape, new_shape, 0.15, 0.3);
+    }
 
     return shape;
 }
@@ -70,7 +86,7 @@ fn fragment(vert: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let dc = map(p);
 
     let edge = smoothstep(0.0, 3.0 / resolution.y, dc.w); // aa
-    let col = mix(dc.rgb, vec3(0.0), edge); 
-
-    return vec4(pow(col, vec3(2.2)), 1.0);// * textureSample(base_color_texture, base_color_sampler, vert.uv);
+    var col = mix(dc.rgb, vec3(0.0), edge); 
+    col = pow(col, vec3(4.0)); // Some rando color curve
+    return vec4(col, 1.0);// * textureSample(base_color_texture, base_color_sampler, vert.uv);
 }
