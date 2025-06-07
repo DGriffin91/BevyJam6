@@ -16,6 +16,9 @@ use bevy::render::render_resource::{
 use bevy::sprite::{AlphaMode2d, Material2d, Material2dPlugin};
 use bytemuck::cast_slice;
 
+use crate::sampling::{hash_noise, hash_noise_signed};
+pub mod sampling;
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(AssetPlugin {
@@ -30,23 +33,92 @@ fn main() {
             bevy_simple_subsecond_system::prelude::SimpleSubsecondPlugin::default(),
             Material2dPlugin::<GameMaterial>::default(),
         ))
-        .add_systems(Startup, setup)
-        .add_systems(Update, greet)
+        .add_systems(Startup, (setup, spawn_blobs))
+        .add_systems(Update, (render_blobs, move_blobs))
         .run();
 }
 
-fn greet(time: Res<Time>) {
-    info_once!(
-        "Hello from a hotpatched system! Try changing this string while the app is running! Patched at t = {} s!!",
-        time.elapsed_secs()
-    );
+#[derive(Clone, Copy, Component, Deref, DerefMut)]
+pub struct BlobSize(pub f32);
+
+#[derive(Clone, Copy, Component, Deref, DerefMut)]
+pub struct BlobPosition(pub Vec2);
+
+#[derive(Clone, Copy, Component, Deref, DerefMut)]
+pub struct BlobVelocity(pub Vec2);
+
+#[derive(Clone, Copy, Component, Deref, DerefMut)]
+pub struct BlobColor(pub Vec3);
+
+fn spawn_blobs(mut commands: Commands) {
+    for i in 0..32 {
+        let vel_rng = vec2(hash_noise_signed(0, i, 1), hash_noise_signed(0, i, 2));
+
+        commands.spawn((
+            BlobSize(0.15 + hash_noise(i, 0, 0) * 0.2),
+            BlobPosition(vec2(
+                hash_noise_signed(0, i, 1) * 0.5,
+                hash_noise_signed(0, i, 2) * 0.5,
+            )),
+            BlobVelocity(0.002 * vel_rng.signum() + vel_rng * 0.001),
+            BlobColor(vec3(
+                hash_noise(i, i, 1),
+                hash_noise(i, i, 2),
+                hash_noise(i, i, 3),
+            )),
+        ));
+    }
+}
+
+fn move_blobs(
+    blobs: Query<(&BlobSize, &mut BlobPosition, &mut BlobVelocity, &BlobColor)>,
+    window: Query<&Window>,
+) {
+    let Ok(window) = window.single() else {
+        return;
+    };
+    let window_size = window.resolution.physical_size().as_vec2();
+    let window_ratio = window_size.x / window_size.y;
+    for (size, mut pos, mut vel, _color) in blobs {
+        **pos += **vel;
+
+        // bounce off walls
+        if pos.x - **size < -window_ratio {
+            vel.x = -vel.x;
+        }
+        if pos.y - **size < -1.0 {
+            vel.y = -vel.y;
+        }
+        if pos.x + **size > window_ratio {
+            vel.x = -vel.x;
+        }
+        if pos.y + **size > 1.0 {
+            vel.y = -vel.y;
+        }
+    }
+}
+
+fn render_blobs(
+    blobs: Query<(&BlobSize, &BlobPosition, &BlobColor)>,
+    mut game_materials: ResMut<Assets<GameMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let (_, game_material) = game_materials.iter_mut().next().unwrap();
+    let mut temp_pos_radius = vec![];
+    let mut temp_color = vec![];
+    for (size, pos, color) in blobs {
+        temp_pos_radius.push(pos.extend(**size).extend(0.0));
+        temp_color.push(color.extend(0.0));
+    }
+    game_material.pos_radius_tex = images.add(data_image(&temp_pos_radius));
+    game_material.color_tex = images.add(data_image(&temp_color));
+    game_material.data.circle_count = temp_pos_radius.len() as u32;
 }
 
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<GameMaterial>>,
-    asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
 ) {
     commands.spawn((
@@ -57,18 +129,14 @@ fn setup(
         },
         Tonemapping::TonyMcMapface,
     ));
-    let temp_pos_radius = vec![
-        vec4(0.0, 0.0, 0.3, 0.0),
-        vec4(0.3, 0.3, 0.2, 0.0),
-        vec4(0.1, -0.3, 0.2, 0.0),
-    ];
-    let temp_color = vec![
-        vec4(0.2, 0.2, 0.2, 0.2),
-        vec4(1.0, 0.1, 0.1, 0.3),
-        vec4(1.0, 0.1, 1.1, 0.2),
-    ];
+    let temp_pos_radius = vec![Vec4::ZERO];
+    let temp_color = vec![Vec4::ZERO];
     commands.spawn((
-        Mesh2d(meshes.add(Triangle2d::new(Vec2::ZERO, Vec2::ZERO, Vec2::ZERO))),
+        Mesh2d(meshes.add(Triangle2d::new(
+            Vec2::new(-10000., -100000.),
+            Vec2::new(-10000., 10000.),
+            Vec2::new(100000., 10000.),
+        ))),
         MeshMaterial2d(materials.add(GameMaterial {
             data: GameData {
                 bg_color: vec4(1.0, 0.0, 1.0, 1.0),
@@ -105,10 +173,6 @@ struct GameMaterial {
 
 impl Material2d for GameMaterial {
     fn fragment_shader() -> ShaderRef {
-        "game.wgsl".into()
-    }
-
-    fn vertex_shader() -> ShaderRef {
         "game.wgsl".into()
     }
 

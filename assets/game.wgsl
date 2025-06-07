@@ -16,20 +16,6 @@ struct GameData {
 @group(2) @binding(3) var color_tex: texture_2d<f32>;
 @group(2) @binding(4) var color_sampler: sampler;
 
-struct FullscreenVertexOutput {
-    @builtin(position)
-    position: vec4<f32>,
-    @location(0)
-    uv: vec2<f32>,
-};
-
-@vertex
-fn vertex(@builtin(vertex_index) vertex_index: u32) -> FullscreenVertexOutput {
-    let uv = vec2<f32>(f32(vertex_index >> 1u), f32(vertex_index & 1u)) * 2.0;
-    let clip_position = vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
-    return FullscreenVertexOutput(clip_position, uv);
-}
-
 // https://iquilezles.org/articles/distfunctions2d/
 // https://iquilezles.org/articles/smin/
 
@@ -55,15 +41,6 @@ fn blend_shapes(c1: vec4<f32>, c2: vec4<f32>, shape_k: f32, color_k: f32) -> vec
 }
 
 fn map(p: vec2<f32>) -> vec4<f32> {
-    //var c1 = vec4(1.0, 0.1, 0.1, sdCircle(p - vec2(0.3, 0.3), 0.2)); 
-    //var c2 = vec4(0.2, 0.2, 0.2, sdCircle(p, 0.3));
-    //var c3 = vec4(1.0, 0.1, 1.1, sdCircle(p - vec2(0.1, -0.3), 0.2)); 
-    //
-    //var shape = vec4(0.0);
-    //
-    //shape = blend_shapes(c1, c2, 0.15, 0.3);
-    //shape = blend_shapes(c3, shape, 0.15, 0.3);
-
     let cir_0_data = textureLoad(pos_radius_tex, vec2(0, 0), 0);
     let cir_0_color = textureLoad(color_tex, vec2(0, 0), 0);
     var shape = vec4(cir_0_color.rgb, sdCircle(p - cir_0_data.xy, cir_0_data.z));
@@ -78,7 +55,7 @@ fn map(p: vec2<f32>) -> vec4<f32> {
 }
 
 @fragment
-fn fragment(vert: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
     let resolution = view.viewport.zw;
     let fragcoord = vert.position.xy;
     let p = (2.0 * fragcoord - resolution.xy) / resolution.y;
@@ -87,6 +64,6 @@ fn fragment(vert: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     let edge = smoothstep(0.0, 3.0 / resolution.y, dc.w); // aa
     var col = mix(dc.rgb, vec3(0.0), edge); 
-    col = pow(col, vec3(4.0)); // Some rando color curve
+    col = pow(col, vec3(5.0)); // Some rando color curve
     return vec4(col, 1.0);// * textureSample(base_color_texture, base_color_sampler, vert.uv);
 }
