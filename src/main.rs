@@ -8,6 +8,7 @@ Save file before first run to trigger initial rebuild
 
 use bevy::asset::AssetMetaCheck;
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, Extent3d, ShaderRef, ShaderType, TextureDescriptor, TextureDimension,
@@ -21,6 +22,8 @@ pub mod sampling;
 
 fn main() {
     App::new()
+        .init_resource::<MousePosition>()
+        .insert_resource(BlobClickableSize(0.1))
         .add_plugins(DefaultPlugins.set(AssetPlugin {
             // Wasm builds will check for meta files (that don't exist) if this isn't set.
             // This causes errors and even panics in web builds on itch.
@@ -37,6 +40,8 @@ fn main() {
         .add_systems(
             Update,
             (
+                handle_mouse_move,
+                click_blobs,
                 shrink_blobs,
                 set_blob_state,
                 move_blobs,
@@ -48,16 +53,19 @@ fn main() {
         .run();
 }
 
-#[derive(Clone, Copy, Component, Deref, DerefMut)]
-pub struct BlobSize(pub f32);
+#[derive(Resource, Clone, Copy, Deref, DerefMut)]
+pub struct BlobClickableSize(pub f32);
 
-#[derive(Clone, Copy, Component, Deref, DerefMut)]
+#[derive(Component, Clone, Copy, Deref, DerefMut)]
+pub struct BlobSizeRadius(pub f32);
+
+#[derive(Component, Clone, Copy, Deref, DerefMut)]
 pub struct BlobPosition(pub Vec2);
 
-#[derive(Clone, Copy, Component, Deref, DerefMut)]
+#[derive(Component, Clone, Copy, Deref, DerefMut)]
 pub struct BlobVelocity(pub Vec2);
 
-#[derive(Clone, Copy, Component, Deref, DerefMut)]
+#[derive(Component, Clone, Copy, Deref, DerefMut)]
 pub struct BlobColor(pub Vec3);
 
 #[derive(Clone, Copy, Component)]
@@ -68,7 +76,7 @@ fn spawn_blobs(mut commands: Commands) {
         let vel_rng = vec2(hash_noise_signed(0, i, 1), hash_noise_signed(0, i, 2));
 
         commands.spawn((
-            BlobSize(0.15 + hash_noise(i, 0, 0) * 0.2),
+            BlobSizeRadius(0.15 + hash_noise(i, 0, 0) * 0.2),
             BlobPosition(vec2(
                 hash_noise_signed(0, i, 1) * 0.5,
                 hash_noise_signed(0, i, 2) * 0.5,
@@ -83,7 +91,7 @@ fn spawn_blobs(mut commands: Commands) {
     }
 }
 
-fn shrink_blobs(blobs: Query<&mut BlobSize>, time: Res<Time>) {
+fn shrink_blobs(blobs: Query<&mut BlobSizeRadius>, time: Res<Time>) {
     let shink_speed = 0.02;
     for mut blob_size in blobs {
         **blob_size -= time.delta_secs() * shink_speed;
@@ -91,10 +99,13 @@ fn shrink_blobs(blobs: Query<&mut BlobSize>, time: Res<Time>) {
     }
 }
 
-fn set_blob_state(mut commands: Commands, blobs: Query<(Entity, &BlobSize)>) {
-    let temp_size_thresh = 0.1;
+fn set_blob_state(
+    mut commands: Commands,
+    blobs: Query<(Entity, &BlobSizeRadius)>,
+    clickable_size: Res<BlobClickableSize>,
+) {
     for (entity, blob_size) in blobs {
-        if **blob_size < temp_size_thresh {
+        if **blob_size < **clickable_size {
             commands.entity(entity).insert(BlobCanBeClicked);
         } else {
             commands.entity(entity).remove::<BlobCanBeClicked>();
@@ -103,13 +114,15 @@ fn set_blob_state(mut commands: Commands, blobs: Query<(Entity, &BlobSize)>) {
 }
 
 fn move_blobs(
-    blobs: Query<(&BlobSize, &mut BlobPosition, &mut BlobVelocity, &BlobColor)>,
-    window: Query<&Window>,
+    blobs: Query<(
+        &BlobSizeRadius,
+        &mut BlobPosition,
+        &mut BlobVelocity,
+        &BlobColor,
+    )>,
+    window: Single<&Window>,
     time: Res<Time>,
 ) {
-    let Ok(window) = window.single() else {
-        return;
-    };
     let window_size = window.resolution.physical_size().as_vec2();
     let window_ratio = window_size.x / window_size.y;
     for (size, mut pos, mut vel, _color) in blobs {
@@ -131,8 +144,57 @@ fn move_blobs(
     }
 }
 
+#[derive(Resource, Clone, Debug, Default, Deref, DerefMut)]
+struct MousePosition(Vec2);
+
+fn handle_mouse_move(
+    mut cursor_events: EventReader<CursorMoved>,
+    mut mouse_position: ResMut<MousePosition>,
+    window: Single<&Window>,
+) {
+    if let Some(cursor_event) = cursor_events.read().last() {
+        let window_size = window.resolution.size();
+        let window_ratio = window_size.x / window_size.y;
+        mouse_position.0 = cursor_event.position / window_size * 2.0 - 1.0;
+        mouse_position.0.x *= window_ratio;
+    }
+}
+
+fn click_blobs(
+    mut button_events: EventReader<MouseButtonInput>,
+    mouse_position: Res<MousePosition>,
+    blobs: Query<(
+        &mut BlobSizeRadius,
+        &mut BlobPosition,
+        &BlobColor,
+        Has<BlobCanBeClicked>,
+    )>,
+) {
+    let mut clicked = false;
+    for button_event in button_events.read() {
+        if button_event.button == MouseButton::Left {
+            clicked = true;
+        }
+    }
+
+    if clicked {
+        for (mut size, pos, color, can_be_clicked) in blobs {
+            if can_be_clicked {
+                if pos.distance(**mouse_position) < **size {
+                    **size += 0.3;
+                }
+            }
+        }
+    }
+}
+
 fn render_blobs(
-    blobs: Query<(&BlobSize, &BlobPosition, &BlobColor, Has<BlobCanBeClicked>)>,
+    blobs: Query<(
+        &BlobSizeRadius,
+        &BlobPosition,
+        &BlobColor,
+        Has<BlobCanBeClicked>,
+    )>,
     mut game_materials: ResMut<Assets<GameMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -141,18 +203,35 @@ fn render_blobs(
     let (_, game_material) = game_materials.iter_mut().next().unwrap();
     let mut temp_pos_radius = vec![];
     let mut temp_color = vec![];
+
     for (size, pos, color, can_be_clicked) in blobs {
-        temp_pos_radius.push(pos.extend(**size).extend(0.0));
-        let color = if can_be_clicked {
-            temp_click_color
-        } else {
-            **color
-        };
-        temp_color.push(color.extend(0.0));
+        if !can_be_clicked {
+            temp_pos_radius.push(pos.extend(**size).extend(0.0));
+            temp_color.push(color.extend(0.0));
+        }
     }
+
+    for (size, pos, _color, can_be_clicked) in blobs {
+        if can_be_clicked {
+            temp_pos_radius.push(pos.extend(**size).extend(0.0));
+            temp_color.push(temp_click_color.extend(0.0));
+        }
+    }
+
     game_material.pos_radius_tex = images.add(data_image(&temp_pos_radius));
     game_material.color_tex = images.add(data_image(&temp_color));
     game_material.data.circle_count = temp_pos_radius.len() as u32;
+}
+
+fn set_game_text(mut text: Single<&mut Text, With<GameText>>, blobs: Query<&BlobSizeRadius>) {
+    let mut alive_count = 0;
+    for blob_size in blobs {
+        if **blob_size > 0.0 {
+            alive_count += 1;
+        }
+    }
+    text.clear();
+    text.push_str(&format!("{alive_count} alive\n"));
 }
 
 fn setup(
@@ -199,17 +278,6 @@ fn setup(
         },
         GameText,
     ));
-}
-
-fn set_game_text(mut text: Single<&mut Text, With<GameText>>, blobs: Query<&BlobSize>) {
-    let mut alive_count = 0;
-    for blob_size in blobs {
-        if **blob_size > 0.0 {
-            alive_count += 1;
-        }
-    }
-    text.clear();
-    text.push_str(&format!("{alive_count} alive\n"));
 }
 
 #[derive(Component)]

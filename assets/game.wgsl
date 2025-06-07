@@ -59,10 +59,9 @@ fn blend_shapes(c1: vec4<f32>, c2: vec4<f32>, shape_k: f32, color_k: f32) -> vec
 }
 
 fn map(p: vec2<f32>) -> vec4<f32> {
-    let cir_0_data = textureLoad(pos_radius_tex, vec2(0, 0), 0);
-    let cir_0_color = textureLoad(color_tex, vec2(0, 0), 0);
-    var shape = vec4(cir_0_color.rgb, sdCircle(p - cir_0_data.xy, cir_0_data.z));
-    for (var i = 1u; i < game.circle_count; i += 1u) {
+    let blob = load_blob_data(0);
+    var shape = vec4(0.0,0.0,0.0,1.0);
+    for (var i = 0u; i < game.circle_count; i += 1u) {
         let blob = load_blob_data(i);
         var new_shape = vec4(blob.color, sdCircle(p - blob.position, blob.radius));
 
@@ -78,6 +77,20 @@ fn map(p: vec2<f32>) -> vec4<f32> {
     return shape;
 }
 
+fn map2(p: vec2<f32>) -> vec4<f32> {
+    let blob = load_blob_data(0);
+    var shape = vec4(0.0,0.0,0.0,1.0);
+    for (var i = 0u; i < game.circle_count; i += 1u) {
+        let blob = load_blob_data(i);
+        if all(blob.color == vec3(2.0, 2.0, 2.0)) {
+            var new_shape = vec4(blob.color, sdCircle(p - blob.position, blob.radius * 0.8));
+            shape = blend_shapes(shape, new_shape, 0.01, 0.01);
+        }
+    }
+
+    return shape;
+}
+
 @fragment
 fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
     let resolution = view.viewport.zw;
@@ -88,6 +101,14 @@ fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
 
     let edge = smoothstep(0.0, 3.0 / resolution.y, dc.w); // aa
     var col = mix(dc.rgb, vec3(0.0), edge); 
+
+    //col = max(col, mix(dc.rgb, vec3(0.0), smoothstep(0.0, 1.0, dc.w)) * 0.8); 
+
     col = pow(col, vec3(5.0)); // Some rando color curve
+
+    let dc2 = map2(p);
+    let edge2 = smoothstep(0.0, 1.0 / resolution.y, dc2.w); // Highlight
+    col = max(col, mix(dc2.rgb, vec3(0.0), edge2)); 
+
     return vec4(col, 1.0);// * textureSample(base_color_texture, base_color_sampler, vert.uv);
 }
