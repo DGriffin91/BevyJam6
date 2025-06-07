@@ -19,6 +19,24 @@ struct GameData {
 // https://iquilezles.org/articles/distfunctions2d/
 // https://iquilezles.org/articles/smin/
 
+struct BlobData {
+    color: vec3<f32>,
+    position: vec2<f32>,
+    radius: f32,
+}
+
+fn load_blob_data(index: u32) -> BlobData {
+    let cir_data = textureLoad(pos_radius_tex, vec2(index, 0), 0);
+    let cir_color = textureLoad(color_tex, vec2(index, 0), 0);
+
+    var blob: BlobData;
+
+    blob.color = cir_color.rgb;
+    blob.position = cir_data.xy;
+    blob.radius = cir_data.z;
+
+    return blob;
+}
 
 fn sdCircle(p: vec2<f32>, r: f32) -> f32 {
     return length(p) - r;
@@ -45,10 +63,16 @@ fn map(p: vec2<f32>) -> vec4<f32> {
     let cir_0_color = textureLoad(color_tex, vec2(0, 0), 0);
     var shape = vec4(cir_0_color.rgb, sdCircle(p - cir_0_data.xy, cir_0_data.z));
     for (var i = 1u; i < game.circle_count; i += 1u) {
-        let cir_data = textureLoad(pos_radius_tex, vec2(i, 0), 0);
-        let cir_color = textureLoad(color_tex, vec2(i, 0), 0);
-        var new_shape = vec4(cir_color.rgb, sdCircle(p - cir_data.xy, cir_data.z));
-        shape = blend_shapes(shape, new_shape, 0.15, 0.3);
+        let blob = load_blob_data(i);
+        var new_shape = vec4(blob.color, sdCircle(p - blob.position, blob.radius));
+
+
+        var shape_k = max(blob.radius * 0.5, 0.001);
+        var color_k = max(blob.radius * 0.5, 0.001);
+
+        //if cir_data.z > 0.0 {
+        shape = blend_shapes(shape, new_shape, shape_k, color_k);
+        //}
     }
 
     return shape;

@@ -34,7 +34,17 @@ fn main() {
             Material2dPlugin::<GameMaterial>::default(),
         ))
         .add_systems(Startup, (setup, spawn_blobs))
-        .add_systems(Update, (render_blobs, move_blobs))
+        .add_systems(
+            Update,
+            (
+                shrink_blobs,
+                set_blob_state,
+                move_blobs,
+                render_blobs,
+                set_game_text,
+            )
+                .chain(),
+        )
         .run();
 }
 
@@ -50,6 +60,9 @@ pub struct BlobVelocity(pub Vec2);
 #[derive(Clone, Copy, Component, Deref, DerefMut)]
 pub struct BlobColor(pub Vec3);
 
+#[derive(Clone, Copy, Component)]
+pub struct BlobCanBeClicked;
+
 fn spawn_blobs(mut commands: Commands) {
     for i in 0..32 {
         let vel_rng = vec2(hash_noise_signed(0, i, 1), hash_noise_signed(0, i, 2));
@@ -60,19 +73,39 @@ fn spawn_blobs(mut commands: Commands) {
                 hash_noise_signed(0, i, 1) * 0.5,
                 hash_noise_signed(0, i, 2) * 0.5,
             )),
-            BlobVelocity(0.002 * vel_rng.signum() + vel_rng * 0.001),
+            BlobVelocity(0.2 * vel_rng.signum() + vel_rng * 0.1),
             BlobColor(vec3(
-                hash_noise(i, i, 1),
-                hash_noise(i, i, 2),
-                hash_noise(i, i, 3),
+                0.2 + hash_noise(i, i, 1) * 0.5,
+                0.2 + hash_noise(i, i, 2) * 0.5,
+                0.2 + hash_noise(i, i, 3) * 0.5,
             )),
         ));
+    }
+}
+
+fn shrink_blobs(blobs: Query<&mut BlobSize>, time: Res<Time>) {
+    let shink_speed = 0.02;
+    for mut blob_size in blobs {
+        **blob_size -= time.delta_secs() * shink_speed;
+        //**blob_size = blob_size.max(0.0);
+    }
+}
+
+fn set_blob_state(mut commands: Commands, blobs: Query<(Entity, &BlobSize)>) {
+    let temp_size_thresh = 0.1;
+    for (entity, blob_size) in blobs {
+        if **blob_size < temp_size_thresh {
+            commands.entity(entity).insert(BlobCanBeClicked);
+        } else {
+            commands.entity(entity).remove::<BlobCanBeClicked>();
+        }
     }
 }
 
 fn move_blobs(
     blobs: Query<(&BlobSize, &mut BlobPosition, &mut BlobVelocity, &BlobColor)>,
     window: Query<&Window>,
+    time: Res<Time>,
 ) {
     let Ok(window) = window.single() else {
         return;
@@ -80,7 +113,7 @@ fn move_blobs(
     let window_size = window.resolution.physical_size().as_vec2();
     let window_ratio = window_size.x / window_size.y;
     for (size, mut pos, mut vel, _color) in blobs {
-        **pos += **vel;
+        **pos += **vel * time.delta_secs();
 
         // bounce off walls
         if pos.x - **size < -window_ratio {
@@ -99,15 +132,22 @@ fn move_blobs(
 }
 
 fn render_blobs(
-    blobs: Query<(&BlobSize, &BlobPosition, &BlobColor)>,
+    blobs: Query<(&BlobSize, &BlobPosition, &BlobColor, Has<BlobCanBeClicked>)>,
     mut game_materials: ResMut<Assets<GameMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let temp_click_color = Vec3::ONE * 2.0;
+
     let (_, game_material) = game_materials.iter_mut().next().unwrap();
     let mut temp_pos_radius = vec![];
     let mut temp_color = vec![];
-    for (size, pos, color) in blobs {
+    for (size, pos, color, can_be_clicked) in blobs {
         temp_pos_radius.push(pos.extend(**size).extend(0.0));
+        let color = if can_be_clicked {
+            temp_click_color
+        } else {
+            **color
+        };
         temp_color.push(color.extend(0.0));
     }
     game_material.pos_radius_tex = images.add(data_image(&temp_pos_radius));
@@ -148,7 +188,32 @@ fn setup(
         })),
         Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
     ));
+
+    commands.spawn((
+        Text::default(),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            left: Val::Px(12.0),
+            ..default()
+        },
+        GameText,
+    ));
 }
+
+fn set_game_text(mut text: Single<&mut Text, With<GameText>>, blobs: Query<&BlobSize>) {
+    let mut alive_count = 0;
+    for blob_size in blobs {
+        if **blob_size > 0.0 {
+            alive_count += 1;
+        }
+    }
+    text.clear();
+    text.push_str(&format!("{alive_count} alive\n"));
+}
+
+#[derive(Component)]
+struct GameText;
 
 #[derive(ShaderType, Debug, Clone, Default)]
 struct GameData {
