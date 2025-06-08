@@ -178,7 +178,7 @@ fn click_blobs(
     }
 
     if clicked {
-        for (mut size, pos, color, can_be_clicked) in blobs {
+        for (mut size, pos, _color, can_be_clicked) in blobs {
             if can_be_clicked {
                 if pos.distance(**mouse_position) < **size {
                     **size += 0.3;
@@ -239,6 +239,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<GameMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    asset_server: Res<AssetServer>,
 ) {
     commands.spawn((
         Camera2d,
@@ -264,6 +265,7 @@ fn setup(
             },
             pos_radius_tex: images.add(data_image(&temp_pos_radius)),
             color_tex: images.add(data_image(&temp_color)),
+            bg_tex: asset_server.load("sky.jpg"),
         })),
         Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
     ));
@@ -302,6 +304,9 @@ struct GameMaterial {
     #[texture(3)]
     #[sampler(4)]
     color_tex: Handle<Image>,
+    #[texture(5)]
+    #[sampler(6)]
+    bg_tex: Handle<Image>,
 }
 
 impl Material2d for GameMaterial {

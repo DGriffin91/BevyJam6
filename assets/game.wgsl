@@ -16,6 +16,9 @@ struct GameData {
 @group(2) @binding(3) var color_tex: texture_2d<f32>;
 @group(2) @binding(4) var color_sampler: sampler;
 
+@group(2) @binding(5) var base_color_texture: texture_2d<f32>;
+@group(2) @binding(6) var base_color_sampler: sampler;
+
 // https://iquilezles.org/articles/distfunctions2d/
 // https://iquilezles.org/articles/smin/
 
@@ -23,6 +26,10 @@ struct BlobData {
     color: vec3<f32>,
     position: vec2<f32>,
     radius: f32,
+}
+
+fn load_blob_pos_radius(index: u32) -> vec3<f32> {
+    return textureLoad(pos_radius_tex, vec2(index, 0), 0).xyz;
 }
 
 fn load_blob_data(index: u32) -> BlobData {
@@ -58,6 +65,20 @@ fn blend_shapes(c1: vec4<f32>, c2: vec4<f32>, shape_k: f32, color_k: f32) -> vec
     return vec4(color, dist);
 }
 
+fn map_height(p: vec2<f32>) -> f32 {
+    let blob = load_blob_data(0);
+    var c1 = 0.0;
+    for (var i = 0u; i < game.circle_count; i += 1u) {
+        let pos_radius = load_blob_pos_radius(i);
+        var c2 = sdCircle(p - pos_radius.xy, pos_radius.z);
+        var shape_k = max(blob.radius * 0.5, 0.001);
+        c1 = opSmoothUnion(c1, c2, shape_k);
+    }
+    var d = max(0.0, -c1);
+    d = pow(d, 1.0 / 1.0);
+    return d;
+}
+
 fn map(p: vec2<f32>) -> vec4<f32> {
     let blob = load_blob_data(0);
     var shape = vec4(0.0,0.0,0.0,1.0);
@@ -91,24 +112,63 @@ fn map2(p: vec2<f32>) -> vec4<f32> {
     return shape;
 }
 
+fn refract(I: vec3<f32>, N: vec3<f32>, eta: f32) -> vec3<f32> {
+    let k = max((1.0 - eta * eta * (1.0 - dot(N, I) * dot(N, I))), 0.0);
+    return eta * I - (eta * dot(N, I) + sqrt(k)) * N;
+}
+
 @fragment
 fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
     let resolution = view.viewport.zw;
     let fragcoord = vert.position.xy;
+    let frag_size = 1.0 / resolution;
+    let frag_uv = fragcoord / resolution;
     let p = (2.0 * fragcoord - resolution.xy) / resolution.y;
+
+    var p1 = vec2(p);
+    var p2 = vec2(p + vec2(frag_size.x * 0.5, 0.0));
+    var p3 = vec2(p + vec2(0.0, frag_size.y * 0.5));
 
     let dc = map(p);
 
-    let edge = smoothstep(0.0, 3.0 / resolution.y, dc.w); // aa
-    var col = mix(dc.rgb, vec3(0.0), edge); 
+    let h = map_height(p1.xy);
 
-    //col = max(col, mix(dc.rgb, vec3(0.0), smoothstep(0.0, 1.0, dc.w)) * 0.8); 
+    let dxy = h - vec2(
+        map_height(p + vec2(frag_size.x, 0.)), 
+        map_height(p + vec2(0., frag_size.y))
+   );
+    
+    var nor = normalize(vec3(dxy * resolution, h * resolution.y * 0.1));
+    nor.y = -nor.y;
+    nor.x = saturate(abs(nor.x) - h * 0.2) * sign(nor.x);
+    nor.y = saturate(abs(nor.y) - h * 0.2) * sign(nor.y);
 
-    col = pow(col, vec3(5.0)); // Some rando color curve
+    let mask = 1.0 - smoothstep(0.0, 3.0 / resolution.y, dc.w); // aa
+    var col = mix(vec3(0.0), dc.rgb, mask); 
+
+    col = pow(col * 1.5, vec3(10.0)); // Some rando color curve
 
     let dc2 = map2(p);
     let edge2 = smoothstep(0.0, 1.0 / resolution.y, dc2.w); // Highlight
-    col = max(col, mix(dc2.rgb, vec3(0.0), edge2)); 
+    let highlight = mix(dc2.rgb, vec3(0.0), edge2);
 
-    return vec4(col, 1.0);// * textureSample(base_color_texture, base_color_sampler, vert.uv);
+    let fresnel = saturate(pow((0.2 - saturate(-dc.w)) * 5.0, 9.0) * mask);
+
+    var bg = vec3(0.0);//textureSample(base_color_texture, base_color_sampler, (abs(p.xy * 0.5)) % 1.0).rgb;
+
+    let refr_d = refract(vec3(p, h), nor, 1.0/1.52);
+    let refr = textureSample(base_color_texture, base_color_sampler, (abs(refr_d.xy)) % 1.0).rgb * 2.0;
+    bg = mix(bg, refr * col, mask);
+
+    let refl_d = reflect(vec3(p, h), nor);
+    let refl = textureSample(base_color_texture, base_color_sampler, (abs(refl_d.xy)) % 1.0).rgb * 2.0;
+    bg += mix(bg, refl * col * fresnel * 20.0, mask);
+
+    bg = mix(bg, col * fresnel * 0.5 + col * h, 0.5 * mask);
+
+    bg += highlight * col * (fresnel + 1.0) * 6.0; 
+
+    //return vec4(vec3(highlight), 1.0);
+    return vec4(bg, 1.0);
+    //return vec4(nor, 1.0);
 }
