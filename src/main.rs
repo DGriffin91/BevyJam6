@@ -6,6 +6,7 @@ dx serve --hot-patch --features bevy/file_watcher,subsecond
 Save file before first run to trigger initial rebuild
 */
 
+use argh::FromArgs;
 use bevy::asset::{AssetMetaCheck, RenderAssetUsages};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::diagnostic::{FrameCount, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
@@ -19,14 +20,42 @@ use bevy::render::view::RenderLayers;
 use bevy::sprite::{Material2d, Material2dPlugin};
 use bevy::window::PresentMode;
 use bevy::winit::{UpdateMode, WinitSettings};
+use bevy_framepace::{FramepaceSettings, Limiter};
 use bytemuck::cast_slice;
 
 use crate::sampling::{hash_noise, hash_noise_signed};
 
 pub mod sampling;
 
+#[cfg(all(not(target_arch = "wasm32")))]
+#[derive(FromArgs)]
+/// Options
+struct Args {
+    /// disable frame pacing
+    #[argh(switch)]
+    disable_pacing: bool,
+}
+
 fn main() {
-    App::new()
+    let mut app = App::new();
+
+    #[cfg(all(not(target_arch = "wasm32")))]
+    let args: Args = argh::from_env();
+
+    #[cfg(all(not(target_arch = "wasm32")))]
+    if !args.disable_pacing {
+        app.insert_resource(FramepaceSettings {
+            limiter: Limiter::Auto,
+        });
+    }
+
+    #[cfg(all(target_arch = "wasm32"))]
+    app.insert_resource(FramepaceSettings {
+        limiter: Limiter::Auto,
+    });
+
+    app.init_resource::<GameSpeed>()
+        .init_resource::<Score>()
         .init_resource::<MousePosition>()
         .insert_resource(BlobClickableSize(0.1))
         .insert_resource(WinitSettings {
@@ -45,7 +74,7 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: String::from("Game"),
-                        present_mode: PresentMode::AutoVsync,
+                        present_mode: PresentMode::AutoNoVsync,
                         fit_canvas_to_parent: true,
                         ..default()
                     }),
@@ -59,6 +88,7 @@ fn main() {
             bevy_simple_subsecond_system::prelude::SimpleSubsecondPlugin::default(),
             Material2dPlugin::<GameMaterial>::default(),
             Material2dPlugin::<RippleMaterial>::default(),
+            bevy_framepace::FramepacePlugin,
         ))
         .add_systems(Startup, (setup, spawn_blobs))
         .add_systems(
@@ -66,11 +96,11 @@ fn main() {
             (
                 handle_mouse_move,
                 click_blobs,
-                shrink_blobs,
+                shrink_grow_blobs,
                 set_blob_state,
                 move_blobs,
                 render_blobs,
-                set_game_text,
+                update_game_text,
                 ripple_swap,
             )
                 .chain(),
@@ -96,6 +126,21 @@ pub struct BlobColor(pub Vec3);
 #[derive(Clone, Copy, Component)]
 pub struct BlobCanBeClicked;
 
+#[derive(Clone, Copy, Component, Deref, DerefMut)]
+pub struct BlobGrowing(f32);
+
+#[derive(Resource, Clone, Copy, Deref, DerefMut, Default)]
+pub struct Score(pub f32);
+
+#[derive(Resource, Clone, Copy, Deref, DerefMut)]
+pub struct GameSpeed(pub f32);
+
+impl Default for GameSpeed {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
 fn spawn_blobs(mut commands: Commands) {
     for i in 0..32 {
         let vel_rng = vec2(hash_noise_signed(0, i, 1), hash_noise_signed(0, i, 2));
@@ -112,25 +157,36 @@ fn spawn_blobs(mut commands: Commands) {
                 0.2 + hash_noise(i, i, 2) * 0.5,
                 0.2 + hash_noise(i, i, 3) * 0.5,
             )),
+            BlobGrowing(0.0),
         ));
     }
 }
 
-fn shrink_blobs(blobs: Query<&mut BlobSizeRadius>, time: Res<Time>) {
+fn shrink_grow_blobs(mut blobs: Query<(&mut BlobSizeRadius, &mut BlobGrowing)>, time: Res<Time>) {
     let shink_speed = 0.02;
-    for mut blob_size in blobs {
-        **blob_size -= time.delta_secs() * shink_speed;
+    let grow_speed = 0.5;
+    for (i, (mut blob_size, mut blob_growing)) in blobs.iter_mut().enumerate() {
+        let ui = i as u32;
+        if **blob_growing > 0.0 {
+            **blob_size += time.delta_secs()
+                * grow_speed
+                * (hash_noise(ui, ui, ui) * 0.5 + 0.5).clamp(0.5, 1.0);
+            **blob_growing *= dbg!((0.00075 / time.delta_secs()).min(0.99));
+        } else {
+            **blob_size -= time.delta_secs() * shink_speed;
+        }
+
         //**blob_size = blob_size.max(0.0);
     }
 }
 
 fn set_blob_state(
     mut commands: Commands,
-    blobs: Query<(Entity, &BlobSizeRadius)>,
+    blobs: Query<(Entity, &BlobSizeRadius, &BlobGrowing)>,
     clickable_size: Res<BlobClickableSize>,
 ) {
-    for (entity, blob_size) in blobs {
-        if **blob_size < **clickable_size {
+    for (entity, blob_size, growing) in blobs {
+        if **blob_size < **clickable_size && **growing == 0.0 {
             commands.entity(entity).insert(BlobCanBeClicked);
         } else {
             commands.entity(entity).remove::<BlobCanBeClicked>();
@@ -147,11 +203,13 @@ fn move_blobs(
     )>,
     window: Single<&Window>,
     time: Res<Time>,
+    mut game_speed: ResMut<GameSpeed>,
 ) {
+    **game_speed += (time.delta_secs() * 0.03) / **game_speed;
     let window_size = window.resolution.physical_size().as_vec2();
     let window_ratio = window_size.x / window_size.y;
     for (size, mut pos, mut vel, _color) in blobs {
-        **pos += **vel * time.delta_secs();
+        **pos += **vel * time.delta_secs() * **game_speed;
 
         // bounce off walls
         if pos.x - **size < -window_ratio {
@@ -197,7 +255,10 @@ fn click_blobs(
         &mut BlobPosition,
         &BlobColor,
         Has<BlobCanBeClicked>,
+        &mut BlobGrowing,
     )>,
+    mut score: ResMut<Score>,
+    game_speed: Res<GameSpeed>,
 ) {
     let mut clicked = false;
     for button_event in button_events.read() {
@@ -207,10 +268,12 @@ fn click_blobs(
     }
 
     if clicked {
-        for (mut size, pos, _color, can_be_clicked) in blobs {
+        for (size, pos, _color, can_be_clicked, mut blob_growing) in blobs {
             if can_be_clicked {
                 if pos.distance(mouse_position.window_rel) < **size {
-                    **size += 0.3;
+                    //**size += 0.3;
+                    **score += 5.0 * (**game_speed);
+                    **blob_growing = 1.0;
                 }
             }
         }
@@ -252,15 +315,26 @@ fn render_blobs(
     game_material.data.circle_count = temp_pos_radius.len() as u32;
 }
 
-fn set_game_text(mut text: Single<&mut Text, With<GameText>>, blobs: Query<&BlobSizeRadius>) {
+fn update_game_text(
+    mut text: Single<&mut Text, With<GameText>>,
+    blobs: Query<&BlobSizeRadius>,
+    mut score: ResMut<Score>,
+    time: Res<Time>,
+    game_speed: Res<GameSpeed>,
+) {
     let mut alive_count = 0;
     for blob_size in blobs {
         if **blob_size > 0.0 {
             alive_count += 1;
         }
     }
+
+    **score += time.delta_secs() * alive_count as f32 * 0.5;
+
     text.clear();
-    text.push_str(&format!("{alive_count} alive\n"));
+    text.push_str(&format!("Alive: {alive_count}\n"));
+    text.push_str(&format!("Score: {:0.1}\n", **score));
+    text.push_str(&format!("Speed: {:0.1}\n", **game_speed));
 }
 
 fn setup(
