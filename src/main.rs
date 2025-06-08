@@ -459,11 +459,12 @@ fn ripple_swap(
         }
     }
 
-    let init = frame.0 < 20;
+    let mut init = frame.0 < 20;
     ripple_images.swap();
     let res = window.resolution.physical_size().as_vec2();
     if ripple_images.res != res {
         *ripple_images = RippleImages::new(res, &mut images);
+        init = true;
     }
     camera.target = ripple_images.a.clone().into();
     let (_, ripple_material) = ripple_materials.iter_mut().next().unwrap();
