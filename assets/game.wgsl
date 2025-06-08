@@ -88,7 +88,11 @@ fn map(p: vec2<f32>) -> vec4<f32> {
     let blob = load_blob_data(0);
     var shape = vec4(0.0,0.0,0.0,1.0);
     for (var i = 0u; i < game.circle_count; i += 1u) {
-        let blob = load_blob_data(i);
+        var blob = load_blob_data(i);
+        // Brighten as it approaches time to turn white
+        if blob.radius < 0.15 && blob.radius > 0.1 {
+            blob.color *= 1.0 + saturate(-(blob.radius - 0.15)) * 4.0;
+        }
         var new_shape = vec4(blob.color, sdCircle(p - blob.position, blob.radius));
 
 

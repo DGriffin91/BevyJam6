@@ -3,8 +3,13 @@
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
 #import bevy_render::view::View
 
+struct GameData {
+    mouse_pos_dt: vec4<f32>,
+    blob_pos_hit: vec4<f32>,
+}
+
 @group(0) @binding(0) var<uniform> view: View;
-@group(2) @binding(0) var<uniform> mouse_pos_dt: vec4<f32>;
+@group(2) @binding(0) var<uniform> data: GameData;
 @group(2) @binding(1) var prev_tex: texture_2d<f32>;
 @group(2) @binding(2) var prev_tex_samp: sampler;
 
@@ -19,9 +24,9 @@ fn fragment(
     let fragcoord = vert.position.xy;
     let p = (2.0 * fragcoord - resolution.xy) / resolution.y;
 
-    let mouse_pos = (mouse_pos_dt.xy * 0.5 + 0.5) * resolution.xy;
-    let mouse_click = mouse_pos_dt.z;
-    let dt = mouse_pos_dt.w;
+    let mouse_pos = (data.mouse_pos_dt.xy * 0.5 + 0.5) * resolution.xy;
+    let mouse_click = data.mouse_pos_dt.z;
+    let dt = data.mouse_pos_dt.w;
 
     // TODO use dt
 
@@ -76,10 +81,21 @@ fn fragment(
         (p_up - p_down) / 2.0
     );
 
+    let dist = distance(fragcoord.xy, mouse_pos) / resolution.y;
     if (mouse_click >= 1.0) {
-        let dist = distance(fragcoord.xy, mouse_pos) / resolution.y;
-        if (dist <= 0.05) {
-            result.x += dist * 10.0;
+        if (dist <= 0.07) {
+            result.x += dist * 15.0;
+        }
+    } else {
+        if (dist <= 0.02) {
+            result.x += dist * 0.5;
+        }
+    }
+
+    if all(data.blob_pos_hit.xy != vec2(0.0)) {
+        let dist = distance(p, data.blob_pos_hit.xy);
+        if (dist <= data.blob_pos_hit.z * 0.5) {
+            result.x += dist * 0.2;
         }
     }
 

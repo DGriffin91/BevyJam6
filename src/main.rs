@@ -10,6 +10,7 @@ use argh::FromArgs;
 use bevy::asset::{AssetMetaCheck, RenderAssetUsages};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::diagnostic::{FrameCount, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
@@ -129,24 +130,28 @@ pub struct BlobCanBeClicked;
 #[derive(Clone, Copy, Component, Deref, DerefMut)]
 pub struct BlobGrowing(f32);
 
-#[derive(Resource, Clone, Copy, Deref, DerefMut, Default)]
-pub struct Score(pub f32);
+#[derive(Resource, Clone, Copy, Default)]
+pub struct Score {
+    pub raw: f32,
+    pub hits: u64,
+    pub misses: u64,
+}
 
 #[derive(Resource, Clone, Copy, Deref, DerefMut)]
 pub struct GameSpeed(pub f32);
 
 impl Default for GameSpeed {
     fn default() -> Self {
-        Self(1.0)
+        Self(0.8)
     }
 }
 
 fn spawn_blobs(mut commands: Commands) {
-    for i in 0..32 {
+    for i in 0..28 {
         let vel_rng = vec2(hash_noise_signed(0, i, 1), hash_noise_signed(0, i, 2));
 
         commands.spawn((
-            BlobSizeRadius(0.15 + hash_noise(i, 0, 0) * 0.2),
+            BlobSizeRadius(0.18 + hash_noise(i, 0, 0) * 0.3),
             BlobPosition(vec2(
                 hash_noise_signed(0, i, 1) * 0.5,
                 hash_noise_signed(0, i, 2) * 0.5,
@@ -164,14 +169,14 @@ fn spawn_blobs(mut commands: Commands) {
 
 fn shrink_grow_blobs(mut blobs: Query<(&mut BlobSizeRadius, &mut BlobGrowing)>, time: Res<Time>) {
     let shink_speed = 0.02;
-    let grow_speed = 0.5;
+    let grow_speed = 1.0;
     for (i, (mut blob_size, mut blob_growing)) in blobs.iter_mut().enumerate() {
         let ui = i as u32;
         if **blob_growing > 0.0 {
             **blob_size += time.delta_secs()
                 * grow_speed
-                * (hash_noise(ui, ui, ui) * 0.5 + 0.5).clamp(0.5, 1.0);
-            **blob_growing *= dbg!((0.00075 / time.delta_secs()).min(0.99));
+                * (hash_noise(ui, ui, ui) * 0.5 + 0.5).clamp(1.0, 1.0);
+            **blob_growing *= (0.00075 / time.delta_secs()).min(0.99);
         } else {
             **blob_size -= time.delta_secs() * shink_speed;
         }
@@ -204,26 +209,39 @@ fn move_blobs(
     window: Single<&Window>,
     time: Res<Time>,
     mut game_speed: ResMut<GameSpeed>,
+    mut ripple_materials: ResMut<Assets<RippleMaterial>>,
 ) {
-    **game_speed += (time.delta_secs() * 0.03) / **game_speed;
+    let (_, ripple_material) = ripple_materials.iter_mut().next().unwrap();
+    **game_speed += (time.delta_secs() * 0.05) / **game_speed;
     let window_size = window.resolution.physical_size().as_vec2();
     let window_ratio = window_size.x / window_size.y;
+    let mut hit_pos_rad = None;
     for (size, mut pos, mut vel, _color) in blobs {
         **pos += **vel * time.delta_secs() * **game_speed;
+        let size = **size;
 
         // bounce off walls
-        if pos.x - **size < -window_ratio {
+        if pos.x - size < -window_ratio {
             vel.x = -vel.x;
+            hit_pos_rad = Some(vec3(pos.x + size, pos.y, size));
         }
-        if pos.y - **size < -1.0 {
+        if pos.y - size < -1.0 {
             vel.y = -vel.y;
+            hit_pos_rad = Some(vec3(pos.x, pos.y - size, size));
         }
-        if pos.x + **size > window_ratio {
+        if pos.x + size > window_ratio {
             vel.x = -vel.x;
+            hit_pos_rad = Some(vec3(pos.x + size, pos.y, size));
         }
-        if pos.y + **size > 1.0 {
+        if pos.y + size > 1.0 {
             vel.y = -vel.y;
+            hit_pos_rad = Some(vec3(pos.x, pos.y + size, size));
         }
+    }
+    if let Some(hit_pos) = hit_pos_rad {
+        ripple_material.blob_pos_hit = hit_pos.extend(0.0);
+    } else {
+        ripple_material.blob_pos_hit = Vec4::ZERO;
     }
 }
 
@@ -262,20 +280,26 @@ fn click_blobs(
 ) {
     let mut clicked = false;
     for button_event in button_events.read() {
-        if button_event.button == MouseButton::Left {
+        if button_event.button == MouseButton::Left && button_event.state == ButtonState::Pressed {
             clicked = true;
         }
     }
 
     if clicked {
+        let mut hit = false;
         for (size, pos, _color, can_be_clicked, mut blob_growing) in blobs {
             if can_be_clicked {
                 if pos.distance(mouse_position.window_rel) < **size {
                     //**size += 0.3;
-                    **score += 5.0 * (**game_speed);
+                    score.raw += 5.0 * (**game_speed);
+                    score.hits += 1;
+                    hit = true;
                     **blob_growing = 1.0;
                 }
             }
+        }
+        if !hit {
+            score.misses += 1;
         }
     }
 }
@@ -329,11 +353,16 @@ fn update_game_text(
         }
     }
 
-    **score += time.delta_secs() * alive_count as f32 * 0.5;
+    score.raw += time.delta_secs() * alive_count as f32 * 0.5;
+
+    let comp_score =
+        score.raw * 0.2 + score.raw * ((score.hits + 20) as f32 / (score.misses + 20) as f32) * 0.8;
 
     text.clear();
     text.push_str(&format!("Alive: {alive_count}\n"));
-    text.push_str(&format!("Score: {:0.1}\n", **score));
+    text.push_str(&format!("Score: {:0.1}\n", comp_score));
+    text.push_str(&format!("Hit:   {}\n", score.hits));
+    text.push_str(&format!("Miss:  {}\n", score.misses));
     text.push_str(&format!("Speed: {:0.1}\n", **game_speed));
 }
 
@@ -363,6 +392,7 @@ fn setup(
         Mesh2d(meshes.add(fullscreen_tri())),
         MeshMaterial2d(ripple_materials.add(RippleMaterial {
             mouse_pos_dt: Vec4::ZERO,
+            blob_pos_hit: Vec4::ZERO,
             prev_tex: ripple_images.b.clone().into(),
         })),
         Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
@@ -424,7 +454,7 @@ fn ripple_swap(
 ) {
     let mut clicked = false;
     for button_event in button_events.read() {
-        if button_event.button == MouseButton::Left {
+        if button_event.button == MouseButton::Left && button_event.state == ButtonState::Pressed {
             clicked = true;
         }
     }
@@ -493,6 +523,8 @@ impl Material2d for GameMaterial {
 struct RippleMaterial {
     #[uniform(0)]
     mouse_pos_dt: Vec4,
+    #[uniform(0)]
+    blob_pos_hit: Vec4,
     #[texture(1)]
     #[sampler(2)]
     prev_tex: Handle<Image>,
