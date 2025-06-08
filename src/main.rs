@@ -6,35 +6,59 @@ dx serve --hot-patch --features bevy/file_watcher,subsecond
 Save file before first run to trigger initial rebuild
 */
 
-use bevy::asset::AssetMetaCheck;
+use bevy::asset::{AssetMetaCheck, RenderAssetUsages};
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, Extent3d, ShaderRef, ShaderType, TextureDescriptor, TextureDimension,
     TextureFormat, TextureUsages,
 };
-use bevy::sprite::{AlphaMode2d, Material2d, Material2dPlugin};
+use bevy::render::view::RenderLayers;
+use bevy::sprite::{Material2d, Material2dPlugin};
+use bevy::window::PresentMode;
+use bevy::winit::{UpdateMode, WinitSettings};
 use bytemuck::cast_slice;
 
 use crate::sampling::{hash_noise, hash_noise_signed};
+
 pub mod sampling;
 
 fn main() {
     App::new()
         .init_resource::<MousePosition>()
         .insert_resource(BlobClickableSize(0.1))
-        .add_plugins(DefaultPlugins.set(AssetPlugin {
-            // Wasm builds will check for meta files (that don't exist) if this isn't set.
-            // This causes errors and even panics in web builds on itch.
-            // See https://github.com/bevyengine/bevy_github_ci_template/issues/48.
-            meta_check: AssetMetaCheck::Never,
-            ..default()
-        }))
+        .insert_resource(WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::Continuous,
+        })
+        .add_plugins(
+            DefaultPlugins
+                .set(AssetPlugin {
+                    // Wasm builds will check for meta files (that don't exist) if this isn't set.
+                    // This causes errors and even panics in web builds on itch.
+                    // See https://github.com/bevyengine/bevy_github_ci_template/issues/48.
+                    meta_check: AssetMetaCheck::Never,
+                    ..default()
+                })
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: String::from("Game"),
+                        present_mode: PresentMode::AutoVsync,
+                        fit_canvas_to_parent: true,
+                        ..default()
+                    }),
+                    ..default()
+                }),
+        )
         .add_plugins((
+            LogDiagnosticsPlugin::default(),
+            FrameTimeDiagnosticsPlugin::default(),
             #[cfg(feature = "subsecond")]
             bevy_simple_subsecond_system::prelude::SimpleSubsecondPlugin::default(),
             Material2dPlugin::<GameMaterial>::default(),
+            Material2dPlugin::<RippleMaterial>::default(),
         ))
         .add_systems(Startup, (setup, spawn_blobs))
         .add_systems(
@@ -47,6 +71,7 @@ fn main() {
                 move_blobs,
                 render_blobs,
                 set_game_text,
+                ripple_swap,
             )
                 .chain(),
         )
@@ -144,8 +169,11 @@ fn move_blobs(
     }
 }
 
-#[derive(Resource, Clone, Debug, Default, Deref, DerefMut)]
-struct MousePosition(Vec2);
+#[derive(Resource, Clone, Debug, Default)]
+pub struct MousePosition {
+    pub window_rel: Vec2,
+    pub ndc: Vec2,
+}
 
 fn handle_mouse_move(
     mut cursor_events: EventReader<CursorMoved>,
@@ -155,8 +183,9 @@ fn handle_mouse_move(
     if let Some(cursor_event) = cursor_events.read().last() {
         let window_size = window.resolution.size();
         let window_ratio = window_size.x / window_size.y;
-        mouse_position.0 = cursor_event.position / window_size * 2.0 - 1.0;
-        mouse_position.0.x *= window_ratio;
+        mouse_position.ndc = cursor_event.position / window_size * 2.0 - 1.0;
+        mouse_position.window_rel = mouse_position.ndc;
+        mouse_position.window_rel.x *= window_ratio;
     }
 }
 
@@ -180,7 +209,7 @@ fn click_blobs(
     if clicked {
         for (mut size, pos, _color, can_be_clicked) in blobs {
             if can_be_clicked {
-                if pos.distance(**mouse_position) < **size {
+                if pos.distance(mouse_position.window_rel) < **size {
                     **size += 0.3;
                 }
             }
@@ -238,10 +267,36 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<GameMaterial>>,
+    mut ripple_materials: ResMut<Assets<RippleMaterial>>,
     mut images: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
 ) {
+    let ripple_images = RippleImages::new(vec2(1280.0, 720.0), &mut images);
+
     commands.spawn((
+        Msaa::Off,
+        Camera2d::default(),
+        Camera {
+            hdr: true,
+            target: ripple_images.a.clone().into(),
+            ..default()
+        },
+        RenderLayers::layer(1),
+        RippleCamera,
+    ));
+
+    commands.spawn((
+        Mesh2d(meshes.add(fullscreen_tri())),
+        MeshMaterial2d(ripple_materials.add(RippleMaterial {
+            mouse_pos_dt: Vec4::ZERO,
+            prev_tex: ripple_images.b.clone().into(),
+        })),
+        Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
+        RenderLayers::layer(1),
+    ));
+
+    commands.spawn((
+        Msaa::Off,
         Camera2d,
         Camera {
             hdr: true,
@@ -252,11 +307,7 @@ fn setup(
     let temp_pos_radius = vec![Vec4::ZERO];
     let temp_color = vec![Vec4::ZERO];
     commands.spawn((
-        Mesh2d(meshes.add(Triangle2d::new(
-            Vec2::new(-10000., -100000.),
-            Vec2::new(-10000., 10000.),
-            Vec2::new(100000., 10000.),
-        ))),
+        Mesh2d(meshes.add(fullscreen_tri())),
         MeshMaterial2d(materials.add(GameMaterial {
             data: GameData {
                 bg_color: vec4(1.0, 0.0, 1.0, 1.0),
@@ -266,6 +317,7 @@ fn setup(
             pos_radius_tex: images.add(data_image(&temp_pos_radius)),
             color_tex: images.add(data_image(&temp_color)),
             bg_tex: asset_server.load("sky.jpg"),
+            ripple_tex: ripple_images.a.clone(),
         })),
         Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
     ));
@@ -280,6 +332,45 @@ fn setup(
         },
         GameText,
     ));
+
+    commands.insert_resource(ripple_images);
+}
+
+fn ripple_swap(
+    mut button_events: EventReader<MouseButtonInput>,
+    mut ripple_images: ResMut<RippleImages>,
+    mut camera: Single<&mut Camera, With<RippleCamera>>,
+    window: Single<&Window>,
+    time: Res<Time>,
+    mut images: ResMut<Assets<Image>>,
+    mut ripple_materials: ResMut<Assets<RippleMaterial>>,
+    mut game_materials: ResMut<Assets<GameMaterial>>,
+    mouse_position: Res<MousePosition>,
+) {
+    let mut clicked = false;
+    for button_event in button_events.read() {
+        if button_event.button == MouseButton::Left {
+            clicked = true;
+        }
+    }
+
+    ripple_images.swap();
+    let res = window.resolution.physical_size().as_vec2();
+    if ripple_images.res != res {
+        *ripple_images = RippleImages::new(res, &mut images);
+    }
+    camera.target = ripple_images.a.clone().into();
+    let (_, ripple_material) = ripple_materials.iter_mut().next().unwrap();
+    ripple_material.mouse_pos_dt = vec4(
+        mouse_position.ndc.x,
+        mouse_position.ndc.y,
+        if clicked { 1.0 } else { 0.0 },
+        time.delta_secs(),
+    );
+    ripple_material.prev_tex = ripple_images.b.clone();
+
+    let (_, game_material) = game_materials.iter_mut().next().unwrap();
+    game_material.ripple_tex = ripple_images.a.clone();
 }
 
 #[derive(Component)]
@@ -307,17 +398,34 @@ struct GameMaterial {
     #[texture(5)]
     #[sampler(6)]
     bg_tex: Handle<Image>,
+    #[texture(7)]
+    #[sampler(8)]
+    ripple_tex: Handle<Image>,
 }
 
 impl Material2d for GameMaterial {
     fn fragment_shader() -> ShaderRef {
         "game.wgsl".into()
     }
+}
 
-    fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Opaque
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+struct RippleMaterial {
+    #[uniform(0)]
+    mouse_pos_dt: Vec4,
+    #[texture(1)]
+    #[sampler(2)]
+    prev_tex: Handle<Image>,
+}
+
+impl Material2d for RippleMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "ripple.wgsl".into()
     }
 }
+
+#[derive(Component, Clone, Copy)]
+struct RippleCamera;
 
 fn data_image(data: &[Vec4]) -> Image {
     Image {
@@ -338,4 +446,49 @@ fn data_image(data: &[Vec4]) -> Image {
         data: Some(cast_slice(data).to_vec()),
         ..Default::default()
     }
+}
+
+#[derive(Resource)]
+pub struct RippleImages {
+    pub a: Handle<Image>,
+    pub b: Handle<Image>,
+    pub res: Vec2,
+}
+
+impl RippleImages {
+    pub fn new(res: Vec2, images: &mut Assets<Image>) -> RippleImages {
+        let size = Extent3d {
+            width: res.x as u32,
+            height: res.y as u32,
+            ..default()
+        };
+        let mut image = Image::new_fill(
+            size,
+            TextureDimension::D2,
+            &[0, 0, 0, 0, 0, 0, 0, 0],
+            TextureFormat::Rgba16Float,
+            RenderAssetUsages::default(),
+        );
+        image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_DST
+            | TextureUsages::RENDER_ATTACHMENT;
+        RippleImages {
+            a: images.add(image.clone()),
+            b: images.add(image),
+            res,
+        }
+    }
+
+    pub fn swap(&mut self) {
+        std::mem::swap(&mut self.a, &mut self.b);
+    }
+}
+
+fn fullscreen_tri() -> Triangle2d {
+    // lol
+    Triangle2d::new(
+        Vec2::new(-10000., -100000.),
+        Vec2::new(-10000., 10000.),
+        Vec2::new(100000., 10000.),
+    )
 }

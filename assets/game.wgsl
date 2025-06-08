@@ -19,6 +19,9 @@ struct GameData {
 @group(2) @binding(5) var base_color_texture: texture_2d<f32>;
 @group(2) @binding(6) var base_color_sampler: sampler;
 
+@group(2) @binding(7) var ripple_texture: texture_2d<f32>;
+@group(2) @binding(8) var ripple_sampler: sampler;
+
 // https://iquilezles.org/articles/distfunctions2d/
 // https://iquilezles.org/articles/smin/
 
@@ -123,7 +126,11 @@ fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
     let fragcoord = vert.position.xy;
     let frag_size = 1.0 / resolution;
     let frag_uv = fragcoord / resolution;
-    let p = (2.0 * fragcoord - resolution.xy) / resolution.y;
+    var p = (2.0 * fragcoord - resolution.xy) / resolution.y;
+
+    let ripple = textureSample(ripple_texture, ripple_sampler, frag_uv).rgb;
+
+    p += ripple.xy * 0.2;
 
     var p1 = vec2(p);
     var p2 = vec2(p + vec2(frag_size.x * 0.5, 0.0));
@@ -167,6 +174,8 @@ fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
     bg = mix(bg, col * fresnel * 0.5 + col * h, 0.5 * mask);
 
     bg += highlight * col * (fresnel + 1.0) * 6.0; 
+
+
 
     //return vec4(vec3(highlight), 1.0);
     return vec4(bg, 1.0);
