@@ -175,7 +175,7 @@ fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
 
     
     var sky = textureSample(base_color_texture, base_color_sampler, (abs(p.xy * vec2(0.0, 1.0) * 0.5 + ripple.x * 2.0 + vec2(globals.time * 0.1, 0.0))) % 1.0).rgb;
-    bg += pow(sky * 0.7, vec3(3.0));
+    bg += pow(sky * 0.8, vec3(3.0));
 
     // Glint
     //let glint_normal = normalize(vec3(ripple.z * 0.1, ripple.w * 0.1, ripple.x));

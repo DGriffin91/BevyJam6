@@ -100,6 +100,7 @@ fn main() {
                 shrink_grow_blobs,
                 set_blob_state,
                 move_blobs,
+                splash_blobs,
                 render_blobs,
                 update_game_text,
                 ripple_swap,
@@ -108,6 +109,8 @@ fn main() {
         )
         .run();
 }
+
+const SPLASH_START_SIZE: f32 = 0.03;
 
 #[derive(Resource, Clone, Copy, Deref, DerefMut)]
 pub struct BlobClickableSize(pub f32);
@@ -129,6 +132,12 @@ pub struct BlobCanBeClicked;
 
 #[derive(Clone, Copy, Component, Deref, DerefMut)]
 pub struct BlobGrowing(f32);
+
+#[derive(Clone, Component)]
+pub struct SplashBlob {
+    age: f32,
+    spawned_by: Vec<Entity>,
+}
 
 #[derive(Resource, Clone, Copy, Default)]
 pub struct Score {
@@ -167,7 +176,10 @@ fn spawn_blobs(mut commands: Commands) {
     }
 }
 
-fn shrink_grow_blobs(mut blobs: Query<(&mut BlobSizeRadius, &mut BlobGrowing)>, time: Res<Time>) {
+fn shrink_grow_blobs(
+    mut blobs: Query<(&mut BlobSizeRadius, &mut BlobGrowing), Without<SplashBlob>>,
+    time: Res<Time>,
+) {
     let shink_speed = 0.02;
     let grow_speed = 1.0;
     for (i, (mut blob_size, mut blob_growing)) in blobs.iter_mut().enumerate() {
@@ -187,7 +199,7 @@ fn shrink_grow_blobs(mut blobs: Query<(&mut BlobSizeRadius, &mut BlobGrowing)>, 
 
 fn set_blob_state(
     mut commands: Commands,
-    blobs: Query<(Entity, &BlobSizeRadius, &BlobGrowing)>,
+    blobs: Query<(Entity, &BlobSizeRadius, &BlobGrowing), Without<SplashBlob>>,
     clickable_size: Res<BlobClickableSize>,
 ) {
     for (entity, blob_size, growing) in blobs {
@@ -205,6 +217,7 @@ fn move_blobs(
         &mut BlobPosition,
         &mut BlobVelocity,
         &BlobColor,
+        Has<SplashBlob>,
     )>,
     window: Single<&Window>,
     time: Res<Time>,
@@ -216,32 +229,96 @@ fn move_blobs(
     let window_size = window.resolution.physical_size().as_vec2();
     let window_ratio = window_size.x / window_size.y;
     let mut hit_pos_rad = None;
-    for (size, mut pos, mut vel, _color) in blobs {
+    for (size, mut pos, mut vel, _color, splash_blob) in blobs {
         **pos += **vel * time.delta_secs() * **game_speed;
         let size = **size;
 
-        // bounce off walls
-        if pos.x - size < -window_ratio {
-            vel.x = -vel.x;
-            hit_pos_rad = Some(vec3(pos.x + size, pos.y, size));
-        }
-        if pos.y - size < -1.0 {
-            vel.y = -vel.y;
-            hit_pos_rad = Some(vec3(pos.x, pos.y - size, size));
-        }
-        if pos.x + size > window_ratio {
-            vel.x = -vel.x;
-            hit_pos_rad = Some(vec3(pos.x + size, pos.y, size));
-        }
-        if pos.y + size > 1.0 {
-            vel.y = -vel.y;
-            hit_pos_rad = Some(vec3(pos.x, pos.y + size, size));
+        if !splash_blob {
+            // bounce off walls
+            if pos.x - size < -window_ratio {
+                vel.x = -vel.x;
+                hit_pos_rad = Some(vec3(pos.x + size, pos.y, size));
+            }
+            if pos.y - size < -1.0 {
+                vel.y = -vel.y;
+                hit_pos_rad = Some(vec3(pos.x, pos.y - size, size));
+            }
+            if pos.x + size > window_ratio {
+                vel.x = -vel.x;
+                hit_pos_rad = Some(vec3(pos.x + size, pos.y, size));
+            }
+            if pos.y + size > 1.0 {
+                vel.y = -vel.y;
+                hit_pos_rad = Some(vec3(pos.x, pos.y + size, size));
+            }
         }
     }
     if let Some(hit_pos) = hit_pos_rad {
         ripple_material.blob_pos_hit = hit_pos.extend(0.0);
     } else {
         ripple_material.blob_pos_hit = Vec4::ZERO;
+    }
+}
+
+fn splash_blobs(
+    mut commands: Commands,
+    mut blobs: Query<
+        (
+            Entity,
+            &mut BlobSizeRadius,
+            &mut BlobPosition,
+            &mut BlobVelocity,
+            &BlobColor,
+            &mut BlobGrowing,
+        ),
+        Without<SplashBlob>,
+    >,
+    mut splash_blobs: Query<(
+        Entity,
+        &mut BlobSizeRadius,
+        &mut BlobPosition,
+        &mut BlobVelocity,
+        &BlobColor,
+        &mut SplashBlob,
+    )>,
+    time: Res<Time>,
+    mut game_speed: ResMut<GameSpeed>,
+    frame: Res<FrameCount>,
+) {
+    **game_speed += (time.delta_secs() * 0.05) / **game_speed;
+    for (splash_entity, mut splash_size, splash_pos, _splash_vel, _splash_color, mut splash_blob) in
+        splash_blobs.iter_mut()
+    {
+        splash_blob.age -= time.elapsed_secs() * 0.00005;
+        **splash_size = splash_blob.age * SPLASH_START_SIZE;
+        if splash_blob.age <= 0.0 {
+            commands.entity(splash_entity).despawn();
+            continue;
+        }
+        for (i, (entity, mut size, pos, _vel, color, _growing)) in blobs.iter_mut().enumerate() {
+            if splash_blob.spawned_by.contains(&entity) {
+                continue;
+            }
+            if splash_pos.distance(**pos) < **size {
+                //**growing = growing.max(splash_blob.age * 0.00001);
+                **size += **splash_size * 0.4 + SPLASH_START_SIZE * 0.1; // TODO use area, smooth anim
+                commands.entity(splash_entity).despawn();
+                if splash_blob.spawned_by.len() < 4 {
+                    let mut new_spawned_by = splash_blob.spawned_by.clone();
+                    new_spawned_by.push(entity);
+                    spawn_splash(
+                        &mut commands,
+                        &frame,
+                        new_spawned_by,
+                        &pos,
+                        color,
+                        i as u32,
+                        1,
+                    );
+                }
+                break;
+            }
+        }
     }
 }
 
@@ -266,17 +343,23 @@ fn handle_mouse_move(
 }
 
 fn click_blobs(
+    mut commands: Commands,
     mut button_events: EventReader<MouseButtonInput>,
     mouse_position: Res<MousePosition>,
-    blobs: Query<(
-        &mut BlobSizeRadius,
-        &mut BlobPosition,
-        &BlobColor,
-        Has<BlobCanBeClicked>,
-        &mut BlobGrowing,
-    )>,
+    mut blobs: Query<
+        (
+            Entity,
+            &mut BlobSizeRadius,
+            &mut BlobPosition,
+            &BlobColor,
+            Has<BlobCanBeClicked>,
+            &mut BlobGrowing,
+        ),
+        Without<SplashBlob>,
+    >,
     mut score: ResMut<Score>,
     game_speed: Res<GameSpeed>,
+    frame: Res<FrameCount>,
 ) {
     let mut clicked = false;
     for button_event in button_events.read() {
@@ -287,7 +370,10 @@ fn click_blobs(
 
     if clicked {
         let mut hit = false;
-        for (size, pos, _color, can_be_clicked, mut blob_growing) in blobs {
+        for (i, (entity, size, pos, color, can_be_clicked, mut blob_growing)) in
+            blobs.iter_mut().enumerate()
+        {
+            let i = i as u32;
             if can_be_clicked {
                 if pos.distance(mouse_position.window_rel) < **size {
                     //**size += 0.3;
@@ -295,12 +381,40 @@ fn click_blobs(
                     score.hits += 1;
                     hit = true;
                     **blob_growing = 1.0;
+                    spawn_splash(&mut commands, &frame, vec![entity], &pos, color, i, 4);
                 }
             }
         }
         if !hit {
             score.misses += 1;
         }
+    }
+}
+
+fn spawn_splash(
+    commands: &mut Commands,
+    frame: &FrameCount,
+    spawned_by: Vec<Entity>,
+    pos: &BlobPosition,
+    color: &BlobColor,
+    i: u32,
+    count: u32,
+) {
+    for j in 0..count {
+        let vel_rng = vec2(
+            hash_noise_signed(i, frame.0, j + 1),
+            hash_noise_signed(i, frame.0, j + 2),
+        );
+        commands.spawn((
+            BlobSizeRadius(SPLASH_START_SIZE),
+            pos.clone(),
+            BlobVelocity(0.3 * vel_rng.signum() + vel_rng * 0.3),
+            BlobColor(**color * 0.9),
+            SplashBlob {
+                age: 1.0,
+                spawned_by: spawned_by.clone(),
+            },
+        ));
     }
 }
 
@@ -341,7 +455,7 @@ fn render_blobs(
 
 fn update_game_text(
     mut text: Single<&mut Text, With<GameText>>,
-    blobs: Query<&BlobSizeRadius>,
+    blobs: Query<&BlobSizeRadius, Without<SplashBlob>>,
     mut score: ResMut<Score>,
     time: Res<Time>,
     game_speed: Res<GameSpeed>,
