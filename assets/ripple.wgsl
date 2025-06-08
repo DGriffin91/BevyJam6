@@ -25,10 +25,9 @@ fn fragment(
 
     // TODO use dt
 
-    // TODO
-    //if (iFrame == 0) {
-    //    return vec4<f32>(0.0);
-    //}
+    if (mouse_click == -1.0) {
+        return vec4<f32>(0.0);
+    }
 
     let texSize = vec2<i32>(resolution.xy);
 
@@ -79,8 +78,8 @@ fn fragment(
 
     if (mouse_click >= 1.0) {
         let dist = distance(fragcoord.xy, mouse_pos) / resolution.y;
-        if (dist <= 0.02) {
-            result.x += 1.0 - dist * 0.02;
+        if (dist <= 0.05) {
+            result.x += dist * 10.0;
         }
     }
 

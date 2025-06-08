@@ -8,7 +8,7 @@ Save file before first run to trigger initial rebuild
 
 use bevy::asset::{AssetMetaCheck, RenderAssetUsages};
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::diagnostic::{FrameCount, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
@@ -346,6 +346,7 @@ fn ripple_swap(
     mut ripple_materials: ResMut<Assets<RippleMaterial>>,
     mut game_materials: ResMut<Assets<GameMaterial>>,
     mouse_position: Res<MousePosition>,
+    frame: Res<FrameCount>,
 ) {
     let mut clicked = false;
     for button_event in button_events.read() {
@@ -354,6 +355,7 @@ fn ripple_swap(
         }
     }
 
+    let init = frame.0 < 20;
     ripple_images.swap();
     let res = window.resolution.physical_size().as_vec2();
     if ripple_images.res != res {
@@ -364,7 +366,11 @@ fn ripple_swap(
     ripple_material.mouse_pos_dt = vec4(
         mouse_position.ndc.x,
         mouse_position.ndc.y,
-        if clicked { 1.0 } else { 0.0 },
+        if clicked {
+            1.0
+        } else {
+            if init { -1.0 } else { 0.0 }
+        },
         time.delta_secs(),
     );
     ripple_material.prev_tex = ripple_images.b.clone();

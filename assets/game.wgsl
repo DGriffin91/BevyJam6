@@ -1,5 +1,6 @@
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
 #import bevy_render::view::View
+#import bevy_render::globals::Globals
 
 struct GameData {
     bg_color: vec4<f32>,
@@ -10,6 +11,7 @@ struct GameData {
 }
 
 @group(0) @binding(0) var<uniform> view: View;
+@group(0) @binding(1) var<uniform> globals: Globals;
 @group(2) @binding(0) var<uniform> game: GameData;
 @group(2) @binding(1) var pos_radius_tex: texture_2d<f32>;
 @group(2) @binding(2) var pos_radius_sampler: sampler;
@@ -101,7 +103,7 @@ fn map(p: vec2<f32>) -> vec4<f32> {
     return shape;
 }
 
-fn map2(p: vec2<f32>) -> vec4<f32> {
+fn ready_to_click_map(p: vec2<f32>) -> vec4<f32> {
     let blob = load_blob_data(0);
     var shape = vec4(0.0,0.0,0.0,1.0);
     for (var i = 0u; i < game.circle_count; i += 1u) {
@@ -128,9 +130,9 @@ fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
     let frag_uv = fragcoord / resolution;
     var p = (2.0 * fragcoord - resolution.xy) / resolution.y;
 
-    let ripple = textureSample(ripple_texture, ripple_sampler, frag_uv).rgb;
+    let ripple = textureSample(ripple_texture, ripple_sampler, frag_uv);
 
-    p += ripple.xy * 0.2;
+    p += ripple.zw * 0.5;
 
     var p1 = vec2(p);
     var p2 = vec2(p + vec2(frag_size.x * 0.5, 0.0));
@@ -138,7 +140,11 @@ fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
 
     let dc = map(p);
 
-    let h = map_height(p1.xy);
+    var h = map_height(p1.xy);
+
+    h += ripple.x * 0.05;
+
+    
 
     let dxy = h - vec2(
         map_height(p + vec2(frag_size.x, 0.)), 
@@ -155,13 +161,24 @@ fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
 
     col = pow(col * 1.5, vec3(10.0)); // Some rando color curve
 
-    let dc2 = map2(p);
+    let dc2 = ready_to_click_map(p);
     let edge2 = smoothstep(0.0, 1.0 / resolution.y, dc2.w); // Highlight
     let highlight = mix(dc2.rgb, vec3(0.0), edge2);
 
     let fresnel = saturate(pow((0.2 - saturate(-dc.w)) * 5.0, 9.0) * mask);
 
-    var bg = vec3(0.0);//textureSample(base_color_texture, base_color_sampler, (abs(p.xy * 0.5)) % 1.0).rgb;
+    var bg = vec3(0.0);
+
+    
+    var sky = textureSample(base_color_texture, base_color_sampler, (abs(p.xy * vec2(0.0, 1.0) * 0.5 + ripple.x * 2.0 + vec2(globals.time * 0.1, 0.0))) % 1.0).rgb;
+    bg += pow(sky * 0.5, vec3(3.0));
+
+    // Glint
+    //let glint_normal = normalize(vec3(ripple.z * 0.1, ripple.w * 0.1, ripple.x));
+    //let lightDir = normalize(vec3(-3.0, 10.0, 3.0));
+    //let diffuse = pow(max(dot(glint_normal, lightDir), 0.0), 3.0);
+    //bg += diffuse * sky + pow(sky, vec3(3.0));
+
 
     let refr_d = refract(vec3(p, h), nor, 1.0/1.52);
     let refr = textureSample(base_color_texture, base_color_sampler, (abs(refr_d.xy)) % 1.0).rgb * 2.0;
@@ -174,8 +191,6 @@ fn fragment(vert: VertexOutput) -> @location(0) vec4<f32> {
     bg = mix(bg, col * fresnel * 0.5 + col * h, 0.5 * mask);
 
     bg += highlight * col * (fresnel + 1.0) * 6.0; 
-
-
 
     //return vec4(vec3(highlight), 1.0);
     return vec4(bg, 1.0);
