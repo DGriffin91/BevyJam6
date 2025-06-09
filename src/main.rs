@@ -207,7 +207,7 @@ fn shrink_grow_blobs(
     time: Res<Time>,
 ) {
     let shink_speed = 0.02;
-    let grow_speed = 1.0;
+    let grow_speed = 0.95;
     for (i, (mut blob_size, mut blob_growing)) in blobs.iter_mut().enumerate() {
         let ui = i as u32;
         if **blob_growing > 0.0 {
@@ -649,7 +649,7 @@ fn ripple_swap(
     mut ripple_materials: ResMut<Assets<RippleMaterial>>,
     mut game_materials: ResMut<Assets<GameMaterial>>,
     mouse_position: Res<MousePosition>,
-    frame: Res<FrameCount>,
+    score: Res<Score>,
 ) {
     let mut clicked = false;
     for button_event in button_events.read() {
@@ -658,7 +658,7 @@ fn ripple_swap(
         }
     }
 
-    let mut init = frame.0 < 20;
+    let mut init = score.raw < 10.0;
     ripple_images.swap();
     let res = window.resolution.physical_size().as_vec2();
     if ripple_images.res != res {
