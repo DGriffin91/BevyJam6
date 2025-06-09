@@ -64,7 +64,8 @@ fn main() {
         limiter: Limiter::Auto,
     });
 
-    app.init_resource::<GameSpeed>()
+    app.init_resource::<LiveBlobs>()
+        .init_resource::<GameSpeed>()
         .init_resource::<Score>()
         .init_resource::<MousePosition>()
         .insert_resource(BlobClickableSize(0.1))
@@ -107,10 +108,11 @@ fn main() {
             Update,
             (
                 unpaused,
-                handle_mouse_move,
                 click_blobs,
+                handle_mouse_move,
                 shrink_grow_blobs,
                 set_blob_state,
+                count_live_blobs,
                 move_blobs,
                 splash_blobs,
                 ripple_swap,
@@ -147,6 +149,9 @@ pub struct BlobCanBeClicked;
 #[derive(Clone, Copy, Component, Deref, DerefMut)]
 pub struct BlobGrowing(f32);
 
+#[derive(Clone, Copy, Resource, Deref, DerefMut, Default)]
+pub struct LiveBlobs(u32);
+
 #[derive(Clone, Component)]
 pub struct SplashBlob {
     age: f32,
@@ -175,6 +180,7 @@ fn spawn_blobs_init_game(
     mut score: ResMut<Score>,
     mut next_state: ResMut<NextState<GameState>>,
     mut game_speed: ResMut<GameSpeed>,
+    mut live_blobs: ResMut<LiveBlobs>,
 ) {
     for entity in existing_blobs {
         commands.entity(entity).despawn();
@@ -183,7 +189,9 @@ fn spawn_blobs_init_game(
     *score = Score::default();
     *game_speed = GameSpeed::default();
 
-    for i in 0..28 {
+    let init_count = 28;
+
+    for i in 0..init_count {
         let vel_rng = vec2(hash_noise_signed(0, i, 1), hash_noise_signed(0, i, 2));
 
         commands.spawn((
@@ -201,7 +209,23 @@ fn spawn_blobs_init_game(
             BlobGrowing(0.0),
         ));
     }
+
+    *live_blobs = LiveBlobs(init_count);
+
     next_state.set(GameState::Running);
+}
+
+fn count_live_blobs(
+    blobs: Query<&BlobSizeRadius, Without<SplashBlob>>,
+    mut live_blobs: ResMut<LiveBlobs>,
+) {
+    let mut alive_count = 0;
+    for blob_size in blobs {
+        if **blob_size > 0.0 {
+            alive_count += 1;
+        }
+    }
+    *live_blobs = LiveBlobs(alive_count);
 }
 
 fn shrink_grow_blobs(
@@ -312,8 +336,18 @@ fn splash_blobs(
     time: Res<Time>,
     mut game_speed: ResMut<GameSpeed>,
     frame: Res<FrameCount>,
+    live_blobs: Res<LiveBlobs>,
 ) {
     **game_speed += (time.delta_secs() * 0.05) / **game_speed;
+
+    let splashes_to_spawn = if live_blobs.0 < 13 {
+        2
+    } else if live_blobs.0 < 5 {
+        3
+    } else {
+        1
+    };
+
     for (splash_entity, mut splash_size, splash_pos, _splash_vel, _splash_color, mut splash_blob) in
         splash_blobs.iter_mut()
     {
@@ -341,7 +375,7 @@ fn splash_blobs(
                         &pos,
                         color,
                         i as u32,
-                        1,
+                        splashes_to_spawn,
                     );
                 }
                 break;
@@ -389,6 +423,7 @@ fn click_blobs(
     game_speed: Res<GameSpeed>,
     frame: Res<FrameCount>,
     asset_server: Res<AssetServer>,
+    live_blobs: Res<LiveBlobs>,
 ) {
     let mut clicked = false;
     for button_event in button_events.read() {
@@ -396,6 +431,14 @@ fn click_blobs(
             clicked = true;
         }
     }
+
+    let splashes_to_spawn = if live_blobs.0 < 14 {
+        4
+    } else if live_blobs.0 < 6 {
+        6
+    } else {
+        3
+    };
 
     if clicked {
         let mut hit = false;
@@ -409,7 +452,15 @@ fn click_blobs(
                 score.hits += 1;
                 hit = true;
                 **blob_growing = 1.0;
-                spawn_splash(&mut commands, &frame, vec![entity], &pos, color, i, 3);
+                spawn_splash(
+                    &mut commands,
+                    &frame,
+                    vec![entity],
+                    &pos,
+                    color,
+                    i,
+                    splashes_to_spawn,
+                );
             }
         }
         if hit {
@@ -512,39 +563,21 @@ fn render_blobs(
     game_material.data.circle_count = temp_pos_radius.len() as u32;
 }
 
-fn update_score(
-    mut score: ResMut<Score>,
-    blobs: Query<&BlobSizeRadius, Without<SplashBlob>>,
-    time: Res<Time>,
-) {
-    let mut alive_count = 0;
-    for blob_size in blobs {
-        if **blob_size > 0.0 {
-            alive_count += 1;
-        }
-    }
-
-    score.raw += time.delta_secs() * alive_count as f32 * 0.5;
+fn update_score(mut score: ResMut<Score>, time: Res<Time>, live_blobs: Res<LiveBlobs>) {
+    score.raw += time.delta_secs() * live_blobs.0 as f32 * 0.5;
 }
 
 fn update_game_text(
     mut text: Single<&mut Text, With<GameText>>,
-    blobs: Query<&BlobSizeRadius, Without<SplashBlob>>,
     score: Res<Score>,
+    live_blobs: Res<LiveBlobs>,
     //game_speed: Res<GameSpeed>,
 ) {
-    let mut alive_count = 0;
-    for blob_size in blobs {
-        if **blob_size > 0.0 {
-            alive_count += 1;
-        }
-    }
-
     let comp_score =
         score.raw * 0.2 + score.raw * ((score.hits + 20) as f32 / (score.misses + 20) as f32) * 0.8;
 
     text.clear();
-    text.push_str(&format!("Alive  {alive_count}\n"));
+    text.push_str(&format!("Alive  {}\n", live_blobs.0));
     text.push_str(&format!("Score  {comp_score:0.1}\n"));
     //text.push_str(&format!("  Hit  {}\n", score.hits));
     //text.push_str(&format!(" Miss  {}\n", score.misses));
