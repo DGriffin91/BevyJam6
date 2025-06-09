@@ -113,6 +113,7 @@ fn main() {
                 move_blobs,
                 splash_blobs,
                 ripple_swap,
+                update_score,
             )
                 .chain()
                 .run_if(in_state(GameState::Running)),
@@ -482,12 +483,10 @@ fn render_blobs(
     game_material.data.circle_count = temp_pos_radius.len() as u32;
 }
 
-fn update_game_text(
-    mut text: Single<&mut Text, With<GameText>>,
-    blobs: Query<&BlobSizeRadius, Without<SplashBlob>>,
+fn update_score(
     mut score: ResMut<Score>,
+    blobs: Query<&BlobSizeRadius, Without<SplashBlob>>,
     time: Res<Time>,
-    //game_speed: Res<GameSpeed>,
 ) {
     let mut alive_count = 0;
     for blob_size in blobs {
@@ -497,6 +496,20 @@ fn update_game_text(
     }
 
     score.raw += time.delta_secs() * alive_count as f32 * 0.5;
+}
+
+fn update_game_text(
+    mut text: Single<&mut Text, With<GameText>>,
+    blobs: Query<&BlobSizeRadius, Without<SplashBlob>>,
+    score: Res<Score>,
+    //game_speed: Res<GameSpeed>,
+) {
+    let mut alive_count = 0;
+    for blob_size in blobs {
+        if **blob_size > 0.0 {
+            alive_count += 1;
+        }
+    }
 
     let comp_score =
         score.raw * 0.2 + score.raw * ((score.hits + 20) as f32 / (score.misses + 20) as f32) * 0.8;
