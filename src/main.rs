@@ -406,7 +406,7 @@ fn click_blobs(
                 score.hits += 1;
                 hit = true;
                 **blob_growing = 1.0;
-                spawn_splash(&mut commands, &frame, vec![entity], &pos, color, i, 4);
+                spawn_splash(&mut commands, &frame, vec![entity], &pos, color, i, 3);
             }
         }
         if !hit {
