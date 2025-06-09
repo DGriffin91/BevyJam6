@@ -28,6 +28,14 @@ use crate::sampling::{hash_noise, hash_noise_signed};
 
 pub mod sampling;
 
+#[derive(Clone, Eq, PartialEq, Debug, Hash, Default, States)]
+enum GameState {
+    #[default]
+    Paused,
+    Running,
+    Start,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(FromArgs)]
 /// Options
@@ -82,6 +90,7 @@ fn main() {
                     ..default()
                 }),
         )
+        .init_state::<GameState>()
         .add_plugins((
             LogDiagnosticsPlugin::default(),
             FrameTimeDiagnosticsPlugin::default(),
@@ -91,22 +100,25 @@ fn main() {
             Material2dPlugin::<RippleMaterial>::default(),
             bevy_framepace::FramepacePlugin,
         ))
-        .add_systems(Startup, (setup, spawn_blobs))
+        .add_systems(Startup, setup)
+        .add_systems(OnEnter(GameState::Start), spawn_blobs_init_game)
         .add_systems(
             Update,
             (
+                unpaused,
                 handle_mouse_move,
                 click_blobs,
                 shrink_grow_blobs,
                 set_blob_state,
                 move_blobs,
                 splash_blobs,
-                render_blobs,
-                update_game_text,
                 ripple_swap,
             )
-                .chain(),
+                .chain()
+                .run_if(in_state(GameState::Running)),
         )
+        .add_systems(Update, (update_game_text, render_blobs))
+        .add_systems(Update, main_menu_paused.run_if(in_state(GameState::Paused)))
         .run();
 }
 
@@ -155,7 +167,20 @@ impl Default for GameSpeed {
     }
 }
 
-fn spawn_blobs(mut commands: Commands) {
+fn spawn_blobs_init_game(
+    mut commands: Commands,
+    existing_blobs: Query<Entity, With<BlobSizeRadius>>,
+    mut score: ResMut<Score>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut game_speed: ResMut<GameSpeed>,
+) {
+    for entity in existing_blobs {
+        commands.entity(entity).despawn();
+    }
+
+    *score = Score::default();
+    *game_speed = GameSpeed::default();
+
     for i in 0..28 {
         let vel_rng = vec2(hash_noise_signed(0, i, 1), hash_noise_signed(0, i, 2));
 
@@ -174,6 +199,7 @@ fn spawn_blobs(mut commands: Commands) {
             BlobGrowing(0.0),
         ));
     }
+    next_state.set(GameState::Running);
 }
 
 fn shrink_grow_blobs(
@@ -289,7 +315,7 @@ fn splash_blobs(
     for (splash_entity, mut splash_size, splash_pos, _splash_vel, _splash_color, mut splash_blob) in
         splash_blobs.iter_mut()
     {
-        splash_blob.age -= time.elapsed_secs() * 0.00005;
+        splash_blob.age -= time.delta_secs() * 0.1;
         **splash_size = splash_blob.age * SPLASH_START_SIZE;
         if splash_blob.age <= 0.0 {
             commands.entity(splash_entity).despawn();
@@ -446,6 +472,11 @@ fn render_blobs(
         }
     }
 
+    if temp_pos_radius.len() == 0 || temp_color.len() == 0 {
+        temp_pos_radius.push(Default::default());
+        temp_color.push(Default::default());
+    }
+
     game_material.pos_radius_tex = images.add(data_image(&temp_pos_radius));
     game_material.color_tex = images.add(data_image(&temp_color));
     game_material.data.circle_count = temp_pos_radius.len() as u32;
@@ -456,7 +487,7 @@ fn update_game_text(
     blobs: Query<&BlobSizeRadius, Without<SplashBlob>>,
     mut score: ResMut<Score>,
     time: Res<Time>,
-    game_speed: Res<GameSpeed>,
+    //game_speed: Res<GameSpeed>,
 ) {
     let mut alive_count = 0;
     for blob_size in blobs {
@@ -471,11 +502,49 @@ fn update_game_text(
         score.raw * 0.2 + score.raw * ((score.hits + 20) as f32 / (score.misses + 20) as f32) * 0.8;
 
     text.clear();
-    text.push_str(&format!("Alive: {alive_count}\n"));
-    text.push_str(&format!("Score: {comp_score:0.1}\n"));
-    text.push_str(&format!("Hit:   {}\n", score.hits));
-    text.push_str(&format!("Miss:  {}\n", score.misses));
-    text.push_str(&format!("Speed: {:0.1}\n", **game_speed));
+    text.push_str(&format!("Alive  {alive_count}\n"));
+    text.push_str(&format!("Score  {comp_score:0.1}\n"));
+    //text.push_str(&format!("  Hit  {}\n", score.hits));
+    //text.push_str(&format!(" Miss  {}\n", score.misses));
+    //text.push_str(&format!("Speed  {:0.1}\n", **game_speed));
+}
+
+fn main_menu_paused(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut text: Single<&mut Text, With<CenteredText>>,
+    score: Res<Score>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    if keyboard_input.just_pressed(KeyCode::KeyP)
+        || keyboard_input.just_pressed(KeyCode::Escape)
+        || keyboard_input.just_pressed(KeyCode::Tab)
+    {
+        next_state.set(GameState::Running);
+    }
+
+    if keyboard_input.just_pressed(KeyCode::Space) {
+        next_state.set(GameState::Start);
+    }
+
+    text.clear();
+    text.push_str(&format!("PRESS SPACE TO START A NEW GAME\n\n"));
+    if score.raw > 0.0 {
+        text.push_str(&format!("PRESS P OR TAB TO RESUME\n"));
+    }
+}
+
+fn unpaused(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut text: Single<&mut Text, With<CenteredText>>,
+) {
+    if keyboard_input.just_pressed(KeyCode::KeyP)
+        || keyboard_input.just_pressed(KeyCode::Escape)
+        || keyboard_input.just_pressed(KeyCode::Tab)
+    {
+        next_state.set(GameState::Paused);
+    }
+    text.clear();
 }
 
 fn setup(
@@ -542,12 +611,30 @@ fn setup(
         Text::default(),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(12.0),
-            left: Val::Px(12.0),
+            top: Val::Vh(2.0),
+            left: Val::Vh(2.0),
             ..default()
         },
         GameText,
     ));
+
+    commands
+        .spawn((Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            position_type: PositionType::Absolute,
+            ..default()
+        },))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::default(),
+                TextLayout::new_with_justify(JustifyText::Center),
+                Node::default(),
+                CenteredText,
+            ));
+        });
 
     commands.insert_resource(ripple_images);
 }
@@ -600,6 +687,9 @@ fn ripple_swap(
 
 #[derive(Component)]
 struct GameText;
+
+#[derive(Component)]
+struct CenteredText;
 
 #[derive(ShaderType, Debug, Clone, Default)]
 struct GameData {
