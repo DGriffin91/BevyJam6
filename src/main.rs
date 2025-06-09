@@ -8,6 +8,7 @@ Save file before first run to trigger initial rebuild
 
 use argh::FromArgs;
 use bevy::asset::{AssetMetaCheck, RenderAssetUsages};
+use bevy::audio::{PlaybackMode, Volume};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::diagnostic::{FrameCount, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::ButtonState;
@@ -118,7 +119,7 @@ fn main() {
                 .chain()
                 .run_if(in_state(GameState::Running)),
         )
-        .add_systems(Update, (update_game_text, render_blobs))
+        .add_systems(Update, (update_game_text, render_blobs, mute))
         .add_systems(Update, main_menu_paused.run_if(in_state(GameState::Paused)))
         .run();
 }
@@ -387,6 +388,7 @@ fn click_blobs(
     mut score: ResMut<Score>,
     game_speed: Res<GameSpeed>,
     frame: Res<FrameCount>,
+    asset_server: Res<AssetServer>,
 ) {
     let mut clicked = false;
     for button_event in button_events.read() {
@@ -410,7 +412,34 @@ fn click_blobs(
                 spawn_splash(&mut commands, &frame, vec![entity], &pos, color, i, 3);
             }
         }
-        if !hit {
+        if hit {
+            commands.spawn((
+                AudioPlayer::new(asset_server.load("hit.flac")),
+                GameAudio,
+                PlaybackSettings {
+                    mode: PlaybackMode::Despawn,
+                    volume: Volume::Decibels(-19.0),
+                    speed: 1.0,
+                    paused: false,
+                    muted: false,
+                    spatial: false,
+                    spatial_scale: None,
+                },
+            ));
+        } else {
+            commands.spawn((
+                AudioPlayer::new(asset_server.load("missed.flac")),
+                GameAudio,
+                PlaybackSettings {
+                    mode: PlaybackMode::Despawn,
+                    volume: Volume::Decibels(-24.0),
+                    speed: 1.0,
+                    paused: false,
+                    muted: false,
+                    spatial: false,
+                    spatial_scale: None,
+                },
+            ));
             score.misses += 1;
         }
     }
@@ -571,6 +600,20 @@ fn setup(
     let ripple_images = RippleImages::new(vec2(1280.0, 720.0), &mut images);
 
     commands.spawn((
+        AudioPlayer::new(asset_server.load("blorb_theme.flac")),
+        GameAudio,
+        PlaybackSettings {
+            mode: PlaybackMode::Loop,
+            volume: Volume::Decibels(-3.0),
+            speed: 1.0,
+            paused: false,
+            muted: false,
+            spatial: false,
+            spatial_scale: None,
+        },
+    ));
+
+    commands.spawn((
         Msaa::Off,
         Camera2d,
         Camera {
@@ -697,6 +740,22 @@ fn ripple_swap(
     let (_, game_material) = game_materials.iter_mut().next().unwrap();
     game_material.ripple_tex = ripple_images.a.clone();
 }
+
+fn mute(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut audio_controller: Query<&mut AudioSink, With<GameAudio>>,
+) {
+    let Ok(mut sink) = audio_controller.single_mut() else {
+        return;
+    };
+
+    if keyboard_input.just_pressed(KeyCode::KeyM) {
+        sink.toggle_mute();
+    }
+}
+
+#[derive(Component)]
+struct GameAudio;
 
 #[derive(Component)]
 struct GameText;
