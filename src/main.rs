@@ -28,7 +28,7 @@ use crate::sampling::{hash_noise, hash_noise_signed};
 
 pub mod sampling;
 
-#[cfg(all(not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(FromArgs)]
 /// Options
 struct Args {
@@ -40,17 +40,17 @@ struct Args {
 fn main() {
     let mut app = App::new();
 
-    #[cfg(all(not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     let args: Args = argh::from_env();
 
-    #[cfg(all(not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     if !args.disable_pacing {
         app.insert_resource(FramepaceSettings {
             limiter: Limiter::Auto,
         });
     }
 
-    #[cfg(all(target_arch = "wasm32"))]
+    #[cfg(target_arch = "wasm32")]
     app.insert_resource(FramepaceSettings {
         limiter: Limiter::Auto,
     });
@@ -374,15 +374,13 @@ fn click_blobs(
             blobs.iter_mut().enumerate()
         {
             let i = i as u32;
-            if can_be_clicked {
-                if pos.distance(mouse_position.window_rel) < **size {
-                    //**size += 0.3;
-                    score.raw += 5.0 * (**game_speed);
-                    score.hits += 1;
-                    hit = true;
-                    **blob_growing = 1.0;
-                    spawn_splash(&mut commands, &frame, vec![entity], &pos, color, i, 4);
-                }
+            if can_be_clicked && pos.distance(mouse_position.window_rel) < **size {
+                //**size += 0.3;
+                score.raw += 5.0 * (**game_speed);
+                score.hits += 1;
+                hit = true;
+                **blob_growing = 1.0;
+                spawn_splash(&mut commands, &frame, vec![entity], &pos, color, i, 4);
             }
         }
         if !hit {
@@ -407,7 +405,7 @@ fn spawn_splash(
         );
         commands.spawn((
             BlobSizeRadius(SPLASH_START_SIZE),
-            pos.clone(),
+            *pos,
             BlobVelocity(0.3 * vel_rng.signum() + vel_rng * 0.3),
             BlobColor(**color * 0.9),
             SplashBlob {
@@ -474,7 +472,7 @@ fn update_game_text(
 
     text.clear();
     text.push_str(&format!("Alive: {alive_count}\n"));
-    text.push_str(&format!("Score: {:0.1}\n", comp_score));
+    text.push_str(&format!("Score: {comp_score:0.1}\n"));
     text.push_str(&format!("Hit:   {}\n", score.hits));
     text.push_str(&format!("Miss:  {}\n", score.misses));
     text.push_str(&format!("Speed: {:0.1}\n", **game_speed));
@@ -492,7 +490,7 @@ fn setup(
 
     commands.spawn((
         Msaa::Off,
-        Camera2d::default(),
+        Camera2d,
         Camera {
             hdr: true,
             target: ripple_images.a.clone().into(),
@@ -507,7 +505,7 @@ fn setup(
         MeshMaterial2d(ripple_materials.add(RippleMaterial {
             mouse_pos_dt: Vec4::ZERO,
             blob_pos_hit: Vec4::ZERO,
-            prev_tex: ripple_images.b.clone().into(),
+            prev_tex: ripple_images.b.clone(),
         })),
         Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
         RenderLayers::layer(1),
@@ -587,8 +585,10 @@ fn ripple_swap(
         mouse_position.ndc.y,
         if clicked {
             1.0
+        } else if init {
+            -1.0
         } else {
-            if init { -1.0 } else { 0.0 }
+            0.0
         },
         time.delta_secs(),
     );
