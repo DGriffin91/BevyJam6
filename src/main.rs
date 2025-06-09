@@ -472,7 +472,7 @@ fn render_blobs(
         }
     }
 
-    if temp_pos_radius.len() == 0 || temp_color.len() == 0 {
+    if temp_pos_radius.is_empty() || temp_color.is_empty() {
         temp_pos_radius.push(Default::default());
         temp_color.push(Default::default());
     }
@@ -527,9 +527,9 @@ fn main_menu_paused(
     }
 
     text.clear();
-    text.push_str(&format!("PRESS SPACE TO START A NEW GAME\n\n"));
+    text.push_str("PRESS SPACE TO START A NEW GAME\n\n");
     if score.raw > 0.0 {
-        text.push_str(&format!("PRESS P OR TAB TO RESUME\n"));
+        text.push_str("PRESS P OR TAB TO RESUME\n");
     }
 }
 
